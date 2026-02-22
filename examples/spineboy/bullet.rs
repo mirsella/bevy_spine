@@ -10,7 +10,7 @@ pub struct BulletPlugin;
 
 impl Plugin for BulletPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<BulletSpawnEvent>().add_systems(
+        app.add_message::<BulletSpawnEvent>().add_systems(
             Update,
             (
                 bullet_spawn.in_set(BulletSystem::Spawn),
@@ -22,7 +22,7 @@ impl Plugin for BulletPlugin {
     }
 }
 
-#[derive(Event)]
+#[derive(Message)]
 pub struct BulletSpawnEvent {
     pub position: Vec2,
     pub velocity: Vec2,
@@ -33,7 +33,7 @@ pub struct Bullet {
     pub velocity: Vec2,
 }
 
-fn bullet_spawn(mut commands: Commands, mut bullet_spawn_events: EventReader<BulletSpawnEvent>) {
+fn bullet_spawn(mut commands: Commands, mut bullet_spawn_events: MessageReader<BulletSpawnEvent>) {
     for event in bullet_spawn_events.read() {
         commands
             .spawn((

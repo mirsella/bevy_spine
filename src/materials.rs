@@ -10,14 +10,16 @@ use bevy::{
     prelude::*,
     reflect::TypePath,
     render::{
-        mesh::{MeshVertexAttribute, MeshVertexBufferLayoutRef},
         render_resource::{
             AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState,
-            RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError, VertexFormat,
+            RenderPipelineDescriptor, SpecializedMeshPipelineError, VertexFormat,
         },
     },
-    sprite::{AlphaMode2d, Material2d, Material2dKey},
+    shader::ShaderRef,
 };
+use bevy::asset::{uuid_handle};
+use bevy::mesh::{MeshVertexAttribute, MeshVertexBufferLayoutRef};
+use bevy::sprite_render::{Material2d, AlphaMode2d, Material2dKey};
 use rusty_spine::BlendMode;
 
 use crate::{SpineMesh, SpineMeshState, SpineSettings, SpineSystem};
@@ -105,13 +107,13 @@ fn update_materials<T: SpineMaterial>(
                 *material = new_material;
             } else {
                 materials.remove(handle.clone());
-                if let Some(mut entity_commands) = commands.get_entity(mesh_entity) {
+                if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
                     entity_commands.remove::<T::MeshMaterial>();
                 }
             }
         } else if let Some(material) = T::update(None, spine_mesh.spine_entity, data, &params) {
             let handle = materials.add(material);
-            if let Some(mut entity_commands) = commands.get_entity(mesh_entity) {
+            if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
                 entity_commands
                     .insert(<T::MeshMaterial as From<Handle<T::Material>>>::from(handle));
             }
@@ -126,7 +128,7 @@ pub const DARK_COLOR_ATTRIBUTE: MeshVertexAttribute = MeshVertexAttribute::new(
     VertexFormat::Float32x4,
 );
 
-pub const SHADER_HANDLE: Handle<Shader> = Handle::<Shader>::weak_from_u128(10655547040990968849);
+pub const SHADER_HANDLE: Handle<Shader> = uuid_handle!("b5694dad-2246-5609-85e4-149838ce0219");
 
 /// A [`SystemParam`] to query [`SpineSettings`].
 ///

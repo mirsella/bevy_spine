@@ -46,7 +46,7 @@ fn setup(
 }
 
 fn on_spawn(
-    mut spine_ready_event: EventReader<SpineReadyEvent>,
+    mut spine_ready_event: MessageReader<SpineReadyEvent>,
     mut spine_query: Query<&mut Spine>,
 ) {
     for event in spine_ready_event.read() {

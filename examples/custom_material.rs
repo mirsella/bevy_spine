@@ -3,13 +3,14 @@ use bevy::{
     prelude::*,
     reflect::TypePath,
     render::{
-        mesh::MeshVertexBufferLayoutRef,
         render_resource::{
-            AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError,
+            AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
         },
     },
-    sprite::{AlphaMode2d, Material2d, Material2dKey, Material2dPlugin},
 };
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::shader::ShaderRef;
+use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlugin};
 use bevy_spine::{
     materials::{
         SpineMaterial, SpineMaterialInfo, SpineMaterialPlugin, DARK_COLOR_ATTRIBUTE,
@@ -69,7 +70,7 @@ fn setup(
 }
 
 fn on_spawn(
-    mut spine_ready_event: EventReader<SpineReadyEvent>,
+    mut spine_ready_event: MessageReader<SpineReadyEvent>,
     mut spine_query: Query<&mut Spine>,
 ) {
     for event in spine_ready_event.read() {
