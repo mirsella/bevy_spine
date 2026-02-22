@@ -10,6 +10,21 @@ bevy_spine = "0.11"
 
 [See online demos!](https://jabuwu.github.io/bevy_spine_demos/) ([source repo](https://github.com/jabuwu/bevy_spine_demos))
 
+## UI Rendering
+
+`bevy_spine` now includes optional UI node rendering through the `ui` feature.
+
+```toml
+[dependencies]
+bevy_spine = { version = "0.11", features = ["ui"] }
+```
+
+`SpineUiBundle` renders a Spine instance into a `ViewportNode`, so it can live inside Bevy UI layout.
+
+Example:
+
+- `cargo run --example ui_spine_showcase --features ui`
+
 ## Versions
 
 | bevy_spine | rusty_spine | bevy | spine |

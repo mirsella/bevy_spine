@@ -9,6 +9,10 @@ readme = "readme.md"
 license-file = "LICENSE"
 exclude = ["assets/*"]
 
+[features]
+default = []
+ui = ["bevy/bevy_ui"]
+
 [dependencies]
 rusty_spine = "0.8"
 bevy = { version = "^0.17.2", default-features = false, features = [
@@ -21,8 +25,12 @@ thiserror = "1.0.50"
 
 [dev-dependencies]
 lerp = "0.5"
-bevy = { version = "^0.17.2", default-features = true }
+bevy = { version = "^0.17.2", default-features = true, features = ["bevy_ui_debug"] }
 
 [workspace]
 resolver = "2"
 members = ["ci"]
+
+[[example]]
+name = "ui_spine_showcase"
+required-features = ["ui"]
