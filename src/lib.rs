@@ -722,7 +722,7 @@ fn spine_spawn(
                                             empty_mesh(&mut mesh);
                                             let mesh_handle = meshes.add(mesh);
                                             parent.spawn((
-                                                Name::new(format!("spine_mesh {}", index)),
+                                                Name::new(format!("spine_mesh {index}")),
                                                 SpineMesh {
                                                     spine_entity,
                                                     handle: mesh_handle.clone(),
