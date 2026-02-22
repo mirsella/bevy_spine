@@ -240,6 +240,12 @@ pub struct SpineBoneParent {
 #[reflect(Component, Clone)]
 pub struct SpineMeshes;
 
+#[derive(Component, Default, Clone, Copy)]
+struct SpineMeshesUpdateState {
+    initialized: bool,
+    culled_frames: u32,
+}
+
 /// Marker component for child entities containing [`Mesh`] components for Spine rendering.
 ///
 /// By default, the meshes may contain several meshes all combined into one to reduce draw calls
@@ -355,6 +361,11 @@ pub struct SpineSettings {
     pub mesh_type: SpineMeshType,
     /// The drawer this Spine should use to create its meshes.
     pub drawer: SpineDrawer,
+    /// Keep rebuilding meshes even when all mesh children are currently out of view.
+    ///
+    /// Defaults to `false` to reduce CPU work for large numbers of off-screen skeletons.
+    /// Set this to `true` if off-screen meshes must stay fully up to date.
+    pub update_meshes_when_invisible: bool,
 }
 
 /// Mesh types to use in [`SpineSettings`].
@@ -391,6 +402,7 @@ impl Default for SpineSettings {
             default_materials: true,
             mesh_type: SpineMeshType::Mesh2D,
             drawer: SpineDrawer::Combined,
+            update_meshes_when_invisible: false,
         }
     }
 }
@@ -739,6 +751,7 @@ fn spine_spawn(
                                     .spawn((
                                         Name::new("spine_meshes"),
                                         SpineMeshes,
+                                        SpineMeshesUpdateState::default(),
                                         Transform::from_xyz(0., 0., 0.),
                                         GlobalTransform::default(),
                                         Visibility::default(),
@@ -883,7 +896,7 @@ pub enum SkeletonRenderableKind {
 
 #[allow(clippy::type_complexity)]
 fn spine_update_meshes(
-    mut spine_query: Query<(&mut Spine, Option<&SpineSettings>)>,
+    mut spine_query: Query<(&mut Spine, Option<&SpineSettings>, &InheritedVisibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_query: Query<(
         Entity,
@@ -892,17 +905,48 @@ fn spine_update_meshes(
         Option<&Mesh2d>,
         Option<&Mesh3d>,
     )>,
+    mesh_visibility_query: Query<&ViewVisibility, With<SpineMesh>>,
     mut commands: Commands,
-    meshes_query: Query<(&ChildOf, &Children), With<SpineMeshes>>,
+    mut meshes_query: Query<(&ChildOf, &Children, &mut SpineMeshesUpdateState), With<SpineMeshes>>,
     asset_server: Res<AssetServer>,
 ) {
-    for (meshes_parent, meshes_children) in meshes_query.iter() {
-        let Ok((mut spine, spine_mesh_type)) = spine_query.get_mut(meshes_parent.parent()) else {
+    const CULLED_RECOVERY_INTERVAL_FRAMES: u32 = 60;
+
+    for (meshes_parent, meshes_children, mut update_state) in meshes_query.iter_mut() {
+        let Ok((mut spine, spine_mesh_type, inherited_visibility)) =
+            spine_query.get_mut(meshes_parent.parent())
+        else {
             continue;
         };
+
+        if !inherited_visibility.get() {
+            continue;
+        }
+
         let SpineSettings {
-            mesh_type, drawer, ..
+            mesh_type,
+            drawer,
+            update_meshes_when_invisible,
+            ..
         } = spine_mesh_type.cloned().unwrap_or(SpineSettings::default());
+
+        if !update_meshes_when_invisible && update_state.initialized {
+            let any_visible = meshes_children.iter().any(|child| {
+                mesh_visibility_query
+                    .get(child)
+                    .is_ok_and(|visibility| visibility.get())
+            });
+            if !any_visible {
+                update_state.culled_frames = update_state.culled_frames.saturating_add(1);
+
+                if update_state.culled_frames < CULLED_RECOVERY_INTERVAL_FRAMES {
+                    continue;
+                }
+            } else {
+                update_state.culled_frames = 0;
+            }
+        }
+
         let mut renderables = match drawer {
             SpineDrawer::Combined => {
                 SkeletonRenderableKind::Combined(spine.0.combined_renderables())
@@ -1055,6 +1099,9 @@ fn spine_update_meshes(
                 renderable_index += 1;
             }
         }
+
+        update_state.initialized = true;
+        update_state.culled_frames = 0;
     }
 }
 
