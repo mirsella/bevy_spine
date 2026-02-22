@@ -303,10 +303,22 @@ fn forward_spine_ui_ready_events(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn cleanup_spine_ui_proxies(
     mut commands: Commands,
     owners: Query<(Entity, &SpineUiOwnedBy)>,
     ui_nodes: Query<(), With<SpineUiNode>>,
+    stale_ui_nodes: Query<
+        Entity,
+        (
+            Without<SpineUiNode>,
+            Or<(
+                With<SpineUiProxy>,
+                With<ViewportNode>,
+                With<SpineUiDebugState>,
+            )>,
+        ),
+    >,
 ) {
     for (entity, owner) in &owners {
         if ui_nodes.contains(owner.0) {
@@ -318,5 +330,11 @@ fn cleanup_spine_ui_proxies(
         if let Ok(mut owner_commands) = commands.get_entity(owner.0) {
             owner_commands.remove::<(SpineUiProxy, ViewportNode)>();
         }
+    }
+
+    for entity in &stale_ui_nodes {
+        commands
+            .entity(entity)
+            .remove::<(SpineUiProxy, ViewportNode, SpineUiDebugState)>();
     }
 }
