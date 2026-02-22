@@ -1161,7 +1161,7 @@ pub mod prelude {
     };
     #[cfg(feature = "ui")]
     pub use crate::{
-        SpineUiBundle, SpineUiDebugState, SpineUiFit, SpineUiNode, SpineUiProxy, SpineUiReadyEvent,
+        SpineUiBundle, SpineUiFit, SpineUiNode, SpineUiProxy, SpineUiReadyEvent,
     };
     pub use rusty_spine::{BoneHandle, SlotHandle};
 }
