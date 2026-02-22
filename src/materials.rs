@@ -4,22 +4,20 @@
 
 use std::marker::PhantomData;
 
+use bevy::asset::uuid_handle;
+use bevy::mesh::{MeshVertexAttribute, MeshVertexBufferLayoutRef};
+use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey};
 use bevy::{
     asset::Asset,
     ecs::system::{StaticSystemParam, SystemParam},
     prelude::*,
     reflect::TypePath,
-    render::{
-        render_resource::{
-            AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState,
-            RenderPipelineDescriptor, SpecializedMeshPipelineError, VertexFormat,
-        },
+    render::render_resource::{
+        AsBindGroup, BlendComponent, BlendFactor, BlendOperation, BlendState,
+        RenderPipelineDescriptor, SpecializedMeshPipelineError, VertexFormat,
     },
     shader::ShaderRef,
 };
-use bevy::asset::{uuid_handle};
-use bevy::mesh::{MeshVertexAttribute, MeshVertexBufferLayoutRef};
-use bevy::sprite_render::{Material2d, AlphaMode2d, Material2dKey};
 use rusty_spine::BlendMode;
 
 use crate::{SpineMesh, SpineMeshState, SpineSettings, SpineSystem};
