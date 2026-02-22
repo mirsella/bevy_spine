@@ -23,17 +23,17 @@ use materials::{
     SpineScreenPmaMaterial,
 };
 use rusty_spine::{
-    atlas::{AtlasFilter, AtlasWrap}, controller::{SkeletonCombinedRenderable, SkeletonRenderable}, AnimationEvent,
-    Physics,
-    Skeleton,
+    AnimationEvent, Physics, Skeleton,
+    atlas::{AtlasFilter, AtlasWrap},
+    controller::{SkeletonCombinedRenderable, SkeletonRenderable},
 };
 use textures::SpineTextureConfig;
 
 use crate::{
     assets::{AtlasLoader, SkeletonJsonLoader},
-    materials::{SpineMaterialPlugin, DARK_COLOR_ATTRIBUTE, SHADER_HANDLE},
+    materials::{DARK_COLOR_ATTRIBUTE, SHADER_HANDLE, SpineMaterialPlugin},
     rusty_spine::{
-        controller::SkeletonControllerSettings, draw::CullDirection, AnimationStateData, BoneHandle,
+        AnimationStateData, BoneHandle, controller::SkeletonControllerSettings, draw::CullDirection,
     },
     textures::{SpineTexture, SpineTextureCreateEvent, SpineTextureDisposeEvent, SpineTextures},
 };
@@ -43,6 +43,8 @@ pub use crate::{assets::*, crossfades::Crossfades, entity_sync::*, handle::*, ru
 /// See [`rusty_spine`] docs for more info.
 pub use crate::rusty_spine::controller::SkeletonController;
 
+#[cfg(feature = "ui")]
+pub use crate::ui::*;
 
 pub use rusty_spine;
 
@@ -166,6 +168,9 @@ impl Plugin for SpinePlugin {
             PostUpdate,
             adjust_spine_textures.in_set(SpineSystem::AdjustSpineTextures),
         );
+
+        #[cfg(feature = "ui")]
+        app.add_plugins(ui::SpineUiPlugin);
 
         load_internal_binary_asset!(
             app,
@@ -1140,6 +1145,8 @@ mod assets;
 mod crossfades;
 mod entity_sync;
 mod handle;
+#[cfg(feature = "ui")]
+mod ui;
 
 pub mod materials;
 pub mod textures;
@@ -1151,6 +1158,10 @@ pub mod prelude {
         SpineBundle, SpineEvent, SpineLoader, SpineMesh, SpineMeshState, SpinePlugin,
         SpineReadyEvent, SpineSet, SpineSettings, SpineSync, SpineSyncSet, SpineSyncSystem,
         SpineSystem,
+    };
+    #[cfg(feature = "ui")]
+    pub use crate::{
+        SpineUiBundle, SpineUiDebugState, SpineUiFit, SpineUiNode, SpineUiProxy, SpineUiReadyEvent,
     };
     pub use rusty_spine::{BoneHandle, SlotHandle};
 }
