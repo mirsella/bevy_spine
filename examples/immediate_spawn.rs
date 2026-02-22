@@ -1,6 +1,7 @@
 //! Demonstrates how to spawn a [`SpineBundle`] and use it in one frame.
 
-use bevy::{app::AppExit, core::FrameCount, prelude::*};
+use bevy::diagnostic::FrameCount;
+use bevy::prelude::*;
 use bevy_spine::{
     SkeletonData, Spine, SpineBundle, SpinePlugin, SpineReadyEvent, SpineSet, SpineSystem,
 };
@@ -20,7 +21,7 @@ fn main() {
             (
                 spawn.in_set(ExampleSet::Spawn).after(SpineSystem::Load),
                 on_spawn.in_set(SpineSet::OnReady),
-                apply_deferred
+                ApplyDeferred
                     .after(ExampleSet::Spawn)
                     .before(SpineSystem::Spawn),
             ),
@@ -71,14 +72,14 @@ fn spawn(
 }
 
 fn on_spawn(
-    mut spine_ready_event: EventReader<SpineReadyEvent>,
-    mut app_exit: EventWriter<AppExit>,
+    mut spine_ready_event: MessageReader<SpineReadyEvent>,
+    mut app_exit: MessageWriter<AppExit>,
     spine_query: Query<&Spine>,
     frame_count: Res<FrameCount>,
 ) {
     for event in spine_ready_event.read() {
         assert!(spine_query.contains(event.entity));
         println!("ready on frame: {}", frame_count.0);
-        app_exit.send_default();
+        app_exit.write_default();
     }
 }

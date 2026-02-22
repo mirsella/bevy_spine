@@ -45,7 +45,7 @@ fn setup(
 }
 
 fn on_spawn(
-    mut spine_ready_event: EventReader<SpineReadyEvent>,
+    mut spine_ready_event: MessageReader<SpineReadyEvent>,
     mut spine_query: Query<&mut Spine>,
     mut commands: Commands,
 ) {
@@ -63,7 +63,7 @@ fn on_spawn(
             if let Some(mut crosshair_entity) = event
                 .bones
                 .get("crosshair")
-                .and_then(|crosshair_entity| commands.get_entity(*crosshair_entity))
+                .and_then(|crosshair_entity| commands.get_entity(*crosshair_entity).ok())
             {
                 crosshair_entity.insert(Crosshair);
             }
@@ -72,14 +72,14 @@ fn on_spawn(
 }
 
 fn ik(
-    mut crosshair_query: Query<(&mut Transform, &SpineBone), With<Crosshair>>,
-    window_query: Query<&Window, With<PrimaryWindow>>,
-    camera_query: Query<(Entity, &Camera)>,
+    crosshair_query: Single<(&mut Transform, &SpineBone), With<Crosshair>>,
+    window_query: Single<&Window, With<PrimaryWindow>>,
+    camera_query: Single<(Entity, &Camera)>,
     global_transform_query: Query<&GlobalTransform>,
 ) {
-    let (camera_entity, camera) = camera_query.single();
+    let (camera_entity, camera) = camera_query.into_inner();
     let camera_global_transform = global_transform_query.get(camera_entity).unwrap();
-    let window = window_query.single();
+    let window = window_query.into_inner();
     let cursor_position = window
         .cursor_position()
         .and_then(|cursor| {
@@ -90,12 +90,11 @@ fn ik(
         .map(|ray| ray.origin.truncate())
         .unwrap_or(Vec2::ZERO);
 
-    if let Ok((mut crosshair_transform, crosshair_bone)) = crosshair_query.get_single_mut() {
-        let parent_global_transform = global_transform_query
-            .get(crosshair_bone.parent.as_ref().unwrap().entity)
-            .unwrap();
-        crosshair_transform.translation = (parent_global_transform.compute_matrix().inverse()
-            * Vec4::new(cursor_position.x, cursor_position.y, 0., 1.))
-        .truncate();
-    }
+    let (mut crosshair_transform, crosshair_bone) = crosshair_query.into_inner();
+    let parent_global_transform = global_transform_query
+        .get(crosshair_bone.parent.as_ref().unwrap().entity)
+        .unwrap();
+    crosshair_transform.translation = (parent_global_transform.to_matrix().inverse()
+        * Vec4::new(cursor_position.x, cursor_position.y, 0., 1.))
+    .truncate();
 }

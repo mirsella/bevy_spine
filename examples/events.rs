@@ -40,7 +40,7 @@ fn setup(
 }
 
 fn on_spawn(
-    mut spine_ready_event: EventReader<SpineReadyEvent>,
+    mut spine_ready_event: MessageReader<SpineReadyEvent>,
     mut spine_query: Query<&mut Spine>,
 ) {
     for event in spine_ready_event.read() {
@@ -53,7 +53,7 @@ fn on_spawn(
     }
 }
 
-fn on_spine_event(mut spine_events: EventReader<SpineEvent>, mut commands: Commands) {
+fn on_spine_event(mut spine_events: MessageReader<SpineEvent>, mut commands: Commands) {
     for event in spine_events.read() {
         if let SpineEvent::Event { name, .. } = event {
             commands
