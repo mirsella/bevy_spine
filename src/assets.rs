@@ -3,7 +3,6 @@ use std::{path::Path, sync::Arc};
 use bevy::{
     asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
-    reflect::TypePath,
 };
 use rusty_spine::SpineError;
 use thiserror::Error;
@@ -19,7 +18,8 @@ pub enum SpineLoaderError {
 /// Bevy asset for [`rusty_spine::Atlas`], loaded from `.atlas` files.
 ///
 /// For loading a complete skeleton, see [`SkeletonData`].
-#[derive(Asset, Debug, TypePath)]
+#[derive(Asset, Debug, Clone, Reflect)]
+#[reflect(opaque)]
 pub struct Atlas {
     pub atlas: Arc<rusty_spine::Atlas>,
 }
@@ -59,7 +59,7 @@ impl AssetLoader for AtlasLoader {
 /// Bevy asset for [`rusty_spine::SkeletonJson`], loaded from `.json` files.
 ///
 /// For loading a complete skeleton, see [`SkeletonData`].
-#[derive(Asset, Debug, TypePath)]
+#[derive(Asset, Debug, Clone, Reflect)]
 pub struct SkeletonJson {
     pub json: Vec<u8>,
 }
@@ -93,7 +93,7 @@ impl AssetLoader for SkeletonJsonLoader {
 /// Bevy asset for [`rusty_spine::SkeletonBinary`], loaded from `.skel` files.
 ///
 /// For loading a complete skeleton, see [`SkeletonData`].
-#[derive(Asset, Debug, TypePath)]
+#[derive(Asset, Debug, Clone, Reflect)]
 pub struct SkeletonBinary {
     pub binary: Vec<u8>,
 }
@@ -128,7 +128,7 @@ impl AssetLoader for SkeletonBinaryLoader {
 /// skeleton (either [`SkeletonJson`] or [`SkeletonBinary`]).
 ///
 /// See [`SkeletonData::new_from_json`] or [`SkeletonData::new_from_binary`].
-#[derive(Asset, Debug, TypePath)]
+#[derive(Asset, Debug, Clone, Reflect)]
 pub struct SkeletonData {
     pub atlas_handle: Handle<Atlas>,
     pub kind: SkeletonDataKind,
@@ -136,13 +136,14 @@ pub struct SkeletonData {
     pub premultiplied_alpha: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Reflect)]
 pub enum SkeletonDataKind {
     BinaryFile(Handle<SkeletonBinary>),
     JsonFile(Handle<SkeletonJson>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Reflect)]
+#[reflect(opaque)]
 pub enum SkeletonDataStatus {
     Loaded(Arc<rusty_spine::SkeletonData>),
     Loading,

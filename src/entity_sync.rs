@@ -221,7 +221,8 @@ pub fn spine_sync_entities_applied<S: SpineSynchronizer>(
 ///
 /// If multiple synchronization steps are needed, additional sync components can be created (see
 /// [`SpineSynchronizerPlugin`]).
-#[derive(Component, Debug, Hash, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Hash, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(Component, Debug, Hash, PartialEq, Clone)]
 pub struct SpineSync;
 
 /// The default [`SpineSynchronizerSystem`], see that struct for more docs.
