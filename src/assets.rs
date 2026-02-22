@@ -1,7 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
     reflect::TypePath,
 };
