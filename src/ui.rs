@@ -104,18 +104,6 @@ pub struct SpineUiReadyEvent {
     pub proxy_entity: Entity,
 }
 
-#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
-#[reflect(Component, Default)]
-pub struct SpineUiDebugState {
-    pub available_size: Vec2,
-    pub setup_min: Vec2,
-    pub setup_size: Vec2,
-    pub reference_size: Vec2,
-    pub fit_scale: Vec2,
-    pub applied_scale: Vec2,
-    pub translation: Vec2,
-}
-
 #[derive(Component, Clone, Copy)]
 struct SpineUiOwnedBy(Entity);
 
@@ -186,7 +174,6 @@ fn setup_spine_ui_nodes(
                 proxy_entity,
                 camera_entity,
             },
-            SpineUiDebugState::default(),
         ));
 
         if let Some(auto_size) = spine_ui.auto_size {
@@ -216,12 +203,11 @@ fn sync_spine_ui_proxies(
         &InheritedVisibility,
         &SpineUiNode,
         &SpineUiProxy,
-        &mut SpineUiDebugState,
     )>,
     mut proxy_query: Query<(&mut Transform, &mut Visibility, &mut Spine)>,
     mut camera_query: Query<&mut Camera>,
 ) {
-    for (computed_node, inherited_visibility, spine_ui, proxy, mut debug_state) in &mut nodes {
+    for (computed_node, inherited_visibility, spine_ui, proxy) in &mut nodes {
         if let Ok(mut camera) = camera_query.get_mut(proxy.camera_entity) {
             camera.is_active = inherited_visibility.get();
         }
@@ -273,14 +259,6 @@ fn sync_spine_ui_proxies(
             -setup_center.x * applied_scale.x,
             -setup_center.y * applied_scale.y,
         ) + spine_ui.offset;
-
-        debug_state.available_size = available_size;
-        debug_state.setup_min = setup_min;
-        debug_state.setup_size = setup_size;
-        debug_state.reference_size = reference_size;
-        debug_state.fit_scale = fit_scale;
-        debug_state.applied_scale = applied_scale;
-        debug_state.translation = centered_translation;
 
         *proxy_transform = Transform::from_translation(centered_translation.extend(0.0))
             .with_scale(applied_scale.extend(1.0));
@@ -338,7 +316,7 @@ fn cleanup_spine_ui_proxies(
         commands.entity(entity).despawn();
 
         if let Ok(mut owner_commands) = commands.get_entity(owner.0) {
-            owner_commands.remove::<(SpineUiProxy, ViewportNode, SpineUiDebugState)>();
+            owner_commands.remove::<(SpineUiProxy, ViewportNode)>();
         }
     }
 }
