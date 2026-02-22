@@ -16,16 +16,23 @@ pub struct SpineUiPlugin;
 
 impl Plugin for SpineUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<SpineUiReadyEvent>().add_systems(
-            Update,
-            (
-                setup_spine_ui_nodes,
-                update_spine_ui_content_size,
-                sync_spine_ui_proxies,
-                forward_spine_ui_ready_events,
-                cleanup_spine_ui_proxies,
-            ),
-        );
+        app.register_type::<SpineUiNode>()
+            .register_type::<SpineUiFit>()
+            .register_type::<SpineUiAnimation>()
+            .register_type::<SpineUiProxy>()
+            .register_type::<SpineUiDebugState>()
+            .register_type::<SpineUiOwnedBy>()
+            .add_message::<SpineUiReadyEvent>()
+            .add_systems(
+                Update,
+                (
+                    setup_spine_ui_nodes,
+                    update_spine_ui_content_size,
+                    sync_spine_ui_proxies,
+                    forward_spine_ui_ready_events,
+                    cleanup_spine_ui_proxies,
+                ),
+            );
     }
 }
 
@@ -104,7 +111,8 @@ pub struct SpineUiReadyEvent {
     pub proxy_entity: Entity,
 }
 
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone, Copy, Reflect)]
+#[reflect(Component, Clone)]
 struct SpineUiOwnedBy(Entity);
 
 #[allow(clippy::type_complexity)]
