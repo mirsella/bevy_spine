@@ -128,6 +128,18 @@ impl Plugin for SpinePlugin {
             SpineMaterialPlugin::<SpineScreenPmaMaterial>::default(),
         ))
         .add_plugins(SpineSyncPlugin::first())
+        .register_type::<Crossfades>()
+        .register_type::<SkeletonDataHandle>()
+        .register_type::<SpineSync>()
+        .register_type::<Spine>()
+        .register_type::<SpineBone>()
+        .register_type::<SpineMeshes>()
+        .register_type::<SpineMesh>()
+        .register_type::<SpineMeshState>()
+        .register_type::<SpineLoader>()
+        .register_type::<SpineSettings>()
+        .register_type::<SpineMeshType>()
+        .register_type::<SpineDrawer>()
         .init_resource::<SpineEventQueue>()
         .insert_resource(SpineTextures::init())
         .insert_resource(SpineReadyEvents::default())
@@ -137,6 +149,10 @@ impl Plugin for SpinePlugin {
         .init_asset::<SkeletonJson>()
         .init_asset::<SkeletonBinary>()
         .init_asset::<SkeletonData>()
+        .register_asset_reflect::<Atlas>()
+        .register_asset_reflect::<SkeletonJson>()
+        .register_asset_reflect::<SkeletonBinary>()
+        .register_asset_reflect::<SkeletonData>()
         .init_asset_loader::<AtlasLoader>()
         .init_asset_loader::<SkeletonJsonLoader>()
         .init_asset_loader::<SkeletonBinaryLoader>()
@@ -196,8 +212,9 @@ struct SpineEventQueue(Arc<Mutex<VecDeque<SpineEvent>>>);
 /// This component does not exist on [`SpineBundle`] initially, since Spine assets may not yet be
 /// loaded when an entity is spawned. Querying for this component type guarantees that all entities
 /// containing it have a Spine rig that is ready to use.
-#[derive(Component, Debug)]
-pub struct Spine(pub SkeletonController);
+#[derive(Component, Debug, Reflect)]
+#[reflect(Component, Debug, from_reflect = false)]
+pub struct Spine(#[reflect(ignore)] pub SkeletonController);
 
 /// When loaded, a [`Spine`] entity has children entities attached to it, each containing this
 /// component.
@@ -206,11 +223,14 @@ pub struct Spine(pub SkeletonController);
 ///
 /// The bones are not automatically synchronized, but can be synchronized easily by adding a
 /// [`SpineSync`] component.
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Reflect)]
+#[reflect(Component, Debug, from_reflect = false)]
 pub struct SpineBone {
     pub spine_entity: Entity,
+    #[reflect(ignore)]
     pub handle: BoneHandle,
     pub name: String,
+    #[reflect(ignore)]
     pub parent: Option<SpineBoneParent>,
 }
 
@@ -220,7 +240,8 @@ pub struct SpineBoneParent {
     pub handle: BoneHandle,
 }
 
-#[derive(Component, Clone)]
+#[derive(Component, Clone, Reflect)]
+#[reflect(Component, Clone)]
 pub struct SpineMeshes;
 
 /// Marker component for child entities containing [`Mesh`] components for Spine rendering.
@@ -228,7 +249,9 @@ pub struct SpineMeshes;
 /// By default, the meshes may contain several meshes all combined into one to reduce draw calls
 /// and improve performance. To interact with individual Spine meshes, see
 /// [`SpineSettings::drawer`].
-#[derive(Component, Debug, Clone)]
+#[derive(Component, Debug, Clone, Reflect)]
+#[reflect(opaque)]
+#[reflect(Component, Debug, Clone)]
 pub struct SpineMesh {
     pub spine_entity: Entity,
     pub handle: Handle<Mesh>,
@@ -236,7 +259,9 @@ pub struct SpineMesh {
 }
 
 /// The state of this [`SpineMesh`].
-#[derive(Default, Component, Debug, Clone)]
+#[derive(Default, Component, Debug, Clone, Reflect)]
+#[reflect(opaque)]
+#[reflect(Component, Default, Debug, Clone)]
 pub enum SpineMeshState {
     /// This Spine mesh contains no mesh data and should not render.
     #[default]
@@ -266,7 +291,8 @@ impl core::ops::DerefMut for Spine {
 /// entities representing the bones of a skeleton (see [`SpineBone`]). These bones are not
 /// synchronized (see [`SpineSync`]), and can be disabled entirely using
 /// [`SpineLoader::without_children`].
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Reflect)]
+#[reflect(Component, Debug)]
 pub enum SpineLoader {
     /// The spine rig is still loading.
     Loading {
@@ -321,7 +347,8 @@ impl SpineLoader {
 /// Settings for how this Spine updates and renders.
 ///
 /// Typically set in [`SpineBundle`] when spawning an entity.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(Component, Debug, PartialEq, Clone)]
 pub struct SpineSettings {
     /// Indicates if default Spine materials should be used (default: `true`).
     ///
@@ -335,7 +362,8 @@ pub struct SpineSettings {
 }
 
 /// Mesh types to use in [`SpineSettings`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(Debug, PartialEq, Clone)]
 pub enum SpineMeshType {
     /// Render meshes in 2D.
     Mesh2D,
@@ -345,7 +373,8 @@ pub enum SpineMeshType {
 }
 
 /// Drawer methods to use in [`SpineSettings`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(Debug, PartialEq, Clone)]
 pub enum SpineDrawer {
     /// Draw each slot as a separate mesh, each represented by one [`SpineMesh`].
     ///

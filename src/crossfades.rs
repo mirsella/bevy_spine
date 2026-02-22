@@ -28,7 +28,8 @@ use rusty_spine::AnimationStateData;
 /// # }
 /// ```
 
-#[derive(Component, Default, Debug, Clone)]
+#[derive(Component, Default, Debug, Clone, Reflect)]
+#[reflect(Component, Default, Debug, Clone)]
 pub struct Crossfades {
     mix_durations: HashMap<(String, String), f32>,
 }
