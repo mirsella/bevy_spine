@@ -1,23 +1,21 @@
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::shader::ShaderRef;
+use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlugin};
 use bevy::{
     ecs::system::{StaticSystemParam, SystemParam},
     prelude::*,
     reflect::TypePath,
-    render::{
-        render_resource::{
-            AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
-        },
+    render::render_resource::{
+        AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
     },
 };
-use bevy::mesh::MeshVertexBufferLayoutRef;
-use bevy::shader::ShaderRef;
-use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlugin};
 use bevy_spine::{
-    materials::{
-        SpineMaterial, SpineMaterialInfo, SpineMaterialPlugin, DARK_COLOR_ATTRIBUTE,
-        DARK_COLOR_SHADER_POSITION,
-    },
     SkeletonController, SkeletonData, Spine, SpineBundle, SpineDrawer, SpinePlugin,
     SpineReadyEvent, SpineSet, SpineSettings,
+    materials::{
+        DARK_COLOR_ATTRIBUTE, DARK_COLOR_SHADER_POSITION, SpineMaterial, SpineMaterialInfo,
+        SpineMaterialPlugin,
+    },
 };
 
 fn main() {

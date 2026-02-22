@@ -1,14 +1,14 @@
+use bevy::window::CursorOptions;
 use bevy::{
     ecs::system::StaticSystemParam,
     input::mouse::MouseMotion,
     prelude::*,
     window::{CursorGrabMode, PrimaryWindow},
 };
-use bevy::window::CursorOptions;
 use bevy_spine::{
+    SpineMeshType,
     materials::{SpineMaterial, SpineMaterialInfo, SpineMaterialPlugin, SpineSettingsQuery},
     prelude::*,
-    SpineMeshType,
 };
 
 #[derive(Component)]
