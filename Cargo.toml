@@ -15,17 +15,19 @@ ui = ["bevy/bevy_ui"]
 
 [dependencies]
 rusty_spine = "0.8"
-bevy = { version = "^0.17.2", default-features = false, features = [
-    "bevy_render",
-    "bevy_asset",
-    "bevy_sprite",
+bevy = { version = "0.17", default-features = false, features = [
+  "bevy_render",
+  "bevy_asset",
+  "bevy_sprite",
 ] }
-glam = { version = "0.30.8", features = ["mint"] }
-thiserror = "1.0.50"
+glam = { version = "0.30", features = ["mint"] }
+thiserror = "2.0.18"
 
 [dev-dependencies]
 lerp = "0.5"
-bevy = { version = "^0.17.2", default-features = true, features = ["bevy_ui_debug"] }
+bevy = { version = "0.17", default-features = true, features = [
+  "bevy_ui_debug",
+] }
 
 [workspace]
 resolver = "2"
