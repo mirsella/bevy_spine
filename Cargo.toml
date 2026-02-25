@@ -16,6 +16,7 @@ ui = ["bevy/bevy_ui"]
 [dependencies]
 rusty_spine = "0.8"
 bevy = { version = "0.18", default-features = false, features = [
+  "bevy_log",
   "bevy_render",
   "bevy_asset",
   "bevy_sprite",
