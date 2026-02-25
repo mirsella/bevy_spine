@@ -176,7 +176,7 @@ impl SkeletonData {
     /// }
     /// ```
     ///
-    /// For more information on the loading process, see [`SkeletonDataHandle`].
+    /// For more information on the loading process, see [`crate::SkeletonDataHandle`].
     pub fn new_from_json(json: Handle<SkeletonJson>, atlas: Handle<Atlas>) -> Self {
         Self {
             atlas_handle: atlas,
@@ -210,7 +210,7 @@ impl SkeletonData {
     /// }
     /// ```
     ///
-    /// For more information on the loading process, see [`SkeletonDataHandle`].
+    /// For more information on the loading process, see [`crate::SkeletonDataHandle`].
     pub fn new_from_binary(binary: Handle<SkeletonBinary>, atlas: Handle<Atlas>) -> Self {
         Self {
             atlas_handle: atlas,

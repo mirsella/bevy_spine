@@ -57,7 +57,7 @@ pub enum SpineSystem {
     /// Spawns helper entities associated with entities containing [`SkeletonDataHandle`] for
     /// drawing meshes and (optionally) adding bone entities (see [`SpineLoader`]).
     Spawn,
-    /// An [`apply_deferred`] to load the spine helper entities this frame.
+    /// An [`bevy::ecs::schedule::ApplyDeferred`] to load the spine helper entities this frame.
     SpawnFlush,
     /// Sends [`SpineReadyEvent`] after [`SpineSystem::SpawnFlush`], indicating [`Spine`]
     /// components on newly spawned entities can now be interacted with.
