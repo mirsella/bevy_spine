@@ -6,7 +6,7 @@ use rusty_spine::AnimationStateData;
 /// Crossfade data to apply to [`rusty_spine::AnimationStateData`]. Allows automated crossfading
 /// between animations.
 ///
-/// Add this alongside [`SkeletonDataHandle`] when spawning a Spine entity:
+/// Add this alongside [`crate::SkeletonDataHandle`] when spawning a Spine entity:
 ///
 /// ```
 /// # use bevy::prelude::*;
