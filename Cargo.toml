@@ -11,6 +11,7 @@ homepage = "https://github.com/mirsella/bevy_spine"
 repository = "https://github.com/mirsella/bevy_spine"
 readme = "readme.md"
 license-file = "LICENSE"
+rust-version = "1.89"
 exclude = ["assets/*"]
 
 [features]
