@@ -1,11 +1,11 @@
 use bevy::{
     asset::RenderAssetUsages,
-    camera::{ClearColorConfig, RenderTarget, visibility::RenderLayers},
+    camera::{visibility::RenderLayers, ClearColorConfig, RenderTarget},
     image::Image,
     platform::collections::{HashMap, HashSet},
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
-    ui::{ContentSize, widget::ViewportNode},
+    ui::{widget::ViewportNode, ContentSize},
 };
 
 use crate::{
