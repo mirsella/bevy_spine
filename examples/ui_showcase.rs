@@ -141,12 +141,12 @@ fn spawn_panel(
                 row_gap: px(6),
                 padding: UiRect::all(px(8)),
                 border: UiRect::all(px(1.0)),
-                border_radius: BorderRadius::all(px(8)),
                 overflow: Overflow::clip(),
                 ..default()
             },
             BackgroundColor(Color::srgb(0.11, 0.12, 0.15)),
             BorderColor::all(Color::srgb(0.24, 0.26, 0.33)),
+            BorderRadius::all(px(8)),
         ))
         .with_children(|panel| {
             panel.spawn((Text::new(title), TextColor(Color::srgb(0.9, 0.9, 0.95))));

@@ -1,11 +1,11 @@
 use bevy::{
     asset::RenderAssetUsages,
-    camera::{ClearColorConfig, RenderTarget, visibility::RenderLayers},
+    camera::{visibility::RenderLayers, ClearColorConfig, RenderTarget},
     image::Image,
     platform::collections::{HashMap, HashSet},
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
-    ui::{ContentSize, widget::ViewportNode},
+    ui::{widget::ViewportNode, ContentSize},
 };
 
 use crate::{
@@ -334,10 +334,10 @@ fn setup_spine_ui_nodes(
                 Camera2d,
                 Camera {
                     order: -1,
+                    target: RenderTarget::Image(image_handle.clone().into()),
                     clear_color: ClearColorConfig::Custom(Color::NONE),
                     ..default()
                 },
-                RenderTarget::Image(image_handle.into()),
                 render_layers.clone(),
                 SpineUiOwnedBy(entity),
             ))
