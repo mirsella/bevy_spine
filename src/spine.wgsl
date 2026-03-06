@@ -58,5 +58,11 @@ fn fragment(
 #ifdef TONEMAP_IN_SHADER
     color = tonemapping::tone_mapping(color, view.color_grading);
 #endif
+#ifdef SRGB_MESH2D_PASS
+    let alpha = color.a;
+    let rgb = max(color.rgb, vec3<f32>(0.0));
+    let srgb = pow(rgb, vec3<f32>(1.0 / 2.2));
+    color = vec4<f32>(srgb, alpha);
+#endif
     return color;
 }
