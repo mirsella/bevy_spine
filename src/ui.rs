@@ -1,11 +1,12 @@
 use bevy::{
     asset::RenderAssetUsages,
-    camera::{visibility::RenderLayers, ClearColorConfig, RenderTarget},
+    camera::{visibility::{RenderLayers, VisibilitySystems}, ClearColorConfig, RenderTarget},
     image::Image,
+    picking::pointer::PointerId,
     platform::collections::{HashMap, HashSet},
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
-    ui::{widget::ViewportNode, ContentSize},
+    ui::{widget::ViewportNode, ContentSize, UiSystems},
 };
 
 use crate::{
@@ -118,7 +119,6 @@ impl Plugin for SpineUiPlugin {
             .register_type::<SpineUiFit>()
             .register_type::<SpineUiAnimation>()
             .register_type::<SpineUiProxy>()
-            .register_type::<SpineUiDebugState>()
             .register_type::<SpineUiOwnedBy>()
             .init_resource::<SpineUiRenderLayerManager>()
             .add_message::<SpineUiReadyEvent>()
@@ -128,15 +128,22 @@ impl Plugin for SpineUiPlugin {
                 (
                     bootstrap_external_render_layers,
                     sync_changed_external_render_layers,
+                    sync_changed_spine_ui_proxy_sources,
                     setup_spine_ui_nodes,
                     resolve_spine_ui_render_layer_conflicts,
                     update_spine_ui_content_size,
-                    sync_spine_ui_proxies,
                     forward_spine_ui_ready_events,
+                    finalize_ready_spine_ui_proxy_swaps,
                     sync_spine_ui_animation_changes,
                     cleanup_spine_ui_proxies,
                 )
                     .chain(),
+            )
+            .add_systems(
+                PostUpdate,
+                sync_spine_ui_proxies
+                    .after(UiSystems::Layout)
+                    .after(VisibilitySystems::VisibilityPropagate),
             );
     }
 }
@@ -212,14 +219,23 @@ pub struct SpineUiProxy {
     pub camera_entity: Entity,
 }
 
-#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
-#[reflect(Component, Default)]
-struct SpineUiDebugState;
-
 #[derive(Component, Clone, Debug, Default)]
 struct SpineUiAnimationState {
     last_applied: Option<SpineUiAnimation>,
     last_non_animation: Option<SpineUiNonAnimationState>,
+}
+
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component, Clone)]
+struct SpineUiCachedBounds {
+    min: Vec2,
+    size: Vec2,
+}
+
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component, Clone)]
+struct SpineUiPendingSwap {
+    previous_proxy: Entity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -332,6 +348,7 @@ fn setup_spine_ui_nodes(
         let camera_entity = commands
             .spawn((
                 Camera2d,
+                Msaa::Off,
                 Camera {
                     order: -1,
                     target: RenderTarget::Image(image_handle.clone().into()),
@@ -345,12 +362,18 @@ fn setup_spine_ui_nodes(
 
         let mut proxy_settings = *settings;
         proxy_settings.mesh_type = crate::SpineMeshType::Mesh2D;
+        proxy_settings.update_meshes_when_invisible = true;
 
         let proxy_entity = commands
             .spawn((
                 SkeletonDataHandle(skeleton.0.clone()),
                 crossfades.clone(),
                 proxy_settings,
+                Transform::default(),
+                GlobalTransform::default(),
+                Visibility::default(),
+                InheritedVisibility::default(),
+                ViewVisibility::default(),
                 SpineLoader::without_children(),
                 SpineRenderOwner,
                 render_layers,
@@ -367,9 +390,113 @@ fn setup_spine_ui_nodes(
             },
             SpineUiAnimationState::default(),
         ));
+        entity_commands.remove::<PointerId>();
 
         if let Some(auto_size) = spine_ui.auto_size {
             entity_commands.insert(ContentSize::fixed_size(auto_size));
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn sync_changed_spine_ui_proxy_sources(
+    mut commands: Commands,
+    nodes: Query<
+        (Entity, &SpineUiSkeleton, &Crossfades, &SpineSettings, &SpineUiProxy),
+        (
+            With<SpineUiNode>,
+            With<SpineUiProxy>,
+            Or<(
+                Changed<SpineUiSkeleton>,
+                Changed<Crossfades>,
+                Changed<SpineSettings>,
+            )>,
+        ),
+    >,
+    proxy_layers: Query<&RenderLayers>,
+    proxy_cached_bounds: Query<&SpineUiCachedBounds>,
+    mut proxy_spines: Query<&mut Spine>,
+) {
+    for (owner, skeleton, crossfades, settings, proxy) in &nodes {
+        let Ok(render_layers) = proxy_layers.get(proxy.proxy_entity).cloned() else {
+            error!(
+                "bevy_spine UI owner {:?} changed source but proxy {:?} is missing RenderLayers; skipping proxy respawn",
+                owner,
+                proxy.proxy_entity
+            );
+            continue;
+        };
+        let cached_bounds = proxy_cached_bounds.get(proxy.proxy_entity).copied().ok();
+
+        if let Ok(mut old_spine) = proxy_spines.get_mut(proxy.proxy_entity) {
+            old_spine.animation_state.clear_track(0);
+        }
+
+        let mut proxy_settings = *settings;
+        proxy_settings.mesh_type = crate::SpineMeshType::Mesh2D;
+        proxy_settings.update_meshes_when_invisible = true;
+
+        let mut proxy_commands = commands.spawn((
+                SkeletonDataHandle(skeleton.0.clone()),
+                crossfades.clone(),
+                proxy_settings,
+                Transform::default(),
+                GlobalTransform::default(),
+                Visibility::Hidden,
+                InheritedVisibility::default(),
+                ViewVisibility::default(),
+                SpineLoader::without_children(),
+                SpineRenderOwner,
+                render_layers,
+                SpineUiOwnedBy(owner),
+                SpineUiPendingSwap {
+                    previous_proxy: proxy.proxy_entity,
+                },
+            ));
+
+        if let Some(cached_bounds) = cached_bounds {
+            proxy_commands.insert(cached_bounds);
+        }
+
+        let _ = proxy_commands.id();
+    }
+}
+
+fn finalize_ready_spine_ui_proxy_swaps(
+    mut commands: Commands,
+    mut spine_ready_events: MessageReader<SpineReadyEvent>,
+    pending_swaps: Query<(&SpineUiPendingSwap, &SpineUiOwnedBy)>,
+    mut owner_proxies: Query<&mut SpineUiProxy>,
+) {
+    for event in spine_ready_events.read() {
+        let Ok((pending_swap, owner)) = pending_swaps.get(event.entity) else {
+            continue;
+        };
+
+        let Ok(mut owner_proxy) = owner_proxies.get_mut(owner.0) else {
+            if let Ok(mut entity_commands) = commands.get_entity(event.entity) {
+                entity_commands.despawn();
+            }
+            continue;
+        };
+
+        if owner_proxy.proxy_entity != pending_swap.previous_proxy {
+            if let Ok(mut entity_commands) = commands.get_entity(event.entity) {
+                entity_commands.despawn();
+            }
+            continue;
+        }
+
+        owner_proxy.proxy_entity = event.entity;
+
+        if let Ok(mut new_proxy_commands) = commands.get_entity(event.entity) {
+            new_proxy_commands
+                .remove::<SpineUiPendingSwap>()
+                .insert(Visibility::Visible);
+        }
+
+        if let Ok(mut old_proxy_commands) = commands.get_entity(pending_swap.previous_proxy) {
+            old_proxy_commands.despawn();
         }
     }
 }
@@ -450,21 +577,31 @@ fn update_spine_ui_content_size(
 }
 
 fn sync_spine_ui_proxies(
-    mut nodes: Query<(
-        &ComputedNode,
-        &InheritedVisibility,
-        &SpineUiNode,
-        &SpineUiProxy,
+    mut commands: Commands,
+    nodes: Query<(&ComputedNode, &InheritedVisibility, &SpineUiNode, &SpineUiProxy), Without<Spine>>,
+    mut proxy_query: Query<(
+        Entity,
+        &mut Transform,
+        &mut Visibility,
+        &mut Spine,
+        &SpineSettings,
+        Option<&SpineUiCachedBounds>,
     )>,
-    mut proxy_query: Query<(&mut Transform, &mut Visibility, &mut Spine)>,
     mut camera_query: Query<&mut Camera>,
 ) {
-    for (computed_node, inherited_visibility, spine_ui, proxy) in &mut nodes {
+    for (computed_node, inherited_visibility, spine_ui, proxy) in &nodes {
         if let Ok(mut camera) = camera_query.get_mut(proxy.camera_entity) {
             camera.is_active = inherited_visibility.get();
         }
 
-        let Ok((mut proxy_transform, mut proxy_visibility, mut spine)) =
+        let Ok((
+            proxy_entity,
+            mut proxy_transform,
+            mut proxy_visibility,
+            mut spine,
+            proxy_settings,
+            cached_bounds,
+        )) =
             proxy_query.get_mut(proxy.proxy_entity)
         else {
             continue;
@@ -475,14 +612,68 @@ fn sync_spine_ui_proxies(
         *skeleton.color_mut() = rusty_spine::Color::new_rgba(r, g, b, a);
 
         let data = skeleton.data();
-        let setup_min = Vec2::new(data.x(), data.y());
-        let setup_size = Vec2::new(data.width(), data.height()).max(Vec2::ONE);
+        let mut setup_min = Vec2::new(data.x(), data.y());
+        let mut setup_size = Vec2::new(data.width().abs(), data.height().abs());
+
+        if setup_size.x <= f32::EPSILON || setup_size.y <= f32::EPSILON {
+            if let Some(cached_bounds) = cached_bounds {
+                setup_min = cached_bounds.min;
+                setup_size = cached_bounds.size.max(Vec2::ONE);
+            } else {
+                let mut fallback_min = Vec2::splat(f32::INFINITY);
+                let mut fallback_max = Vec2::splat(f32::NEG_INFINITY);
+                let mut found_vertices = false;
+
+                let mut update_bounds = |vertices: &[[f32; 2]]| {
+                    for vertex in vertices {
+                        let x = vertex[0];
+                        let y = vertex[1];
+                        if !x.is_finite() || !y.is_finite() {
+                            continue;
+                        }
+                        fallback_min.x = fallback_min.x.min(x);
+                        fallback_min.y = fallback_min.y.min(y);
+                        fallback_max.x = fallback_max.x.max(x);
+                        fallback_max.y = fallback_max.y.max(y);
+                        found_vertices = true;
+                    }
+                };
+
+                match proxy_settings.drawer {
+                    crate::SpineDrawer::Separated => {
+                        for renderable in spine.0.renderables().iter() {
+                            update_bounds(renderable.vertices.as_slice());
+                        }
+                    }
+                    crate::SpineDrawer::Combined => {
+                        for renderable in spine.0.combined_renderables().iter() {
+                            update_bounds(renderable.vertices.as_slice());
+                        }
+                    }
+                    crate::SpineDrawer::None => {}
+                }
+
+                if found_vertices {
+                    setup_min = fallback_min;
+                    setup_size = (fallback_max - fallback_min).abs().max(Vec2::ONE);
+                    commands.entity(proxy_entity).insert(SpineUiCachedBounds {
+                        min: setup_min,
+                        size: setup_size,
+                    });
+                } else {
+                    setup_size = setup_size.max(Vec2::ONE);
+                }
+            }
+        } else {
+            setup_size = setup_size.max(Vec2::ONE);
+        }
+
         let setup_center = setup_min + setup_size * 0.5;
 
-        *proxy_visibility = if inherited_visibility.get() {
-            Visibility::Visible
-        } else {
+        *proxy_visibility = if !inherited_visibility.get() {
             Visibility::Hidden
+        } else {
+            Visibility::Visible
         };
 
         let available_size = computed_node.size().max(Vec2::ONE);
@@ -542,11 +733,25 @@ fn forward_spine_ui_ready_events(
             *skeleton.color_mut() = rusty_spine::Color::new_rgba(r, g, b, a);
 
             if let Some(animation) = spine_ui.animation.as_ref() {
-                let _ = animation_state.set_animation_by_name(
+                if let Err(err) = animation_state.set_animation_by_name(
                     0,
                     animation.name.as_str(),
                     animation.repeat,
-                );
+                ) {
+                    let available = skeleton
+                        .data()
+                        .animations()
+                        .map(|entry| entry.name().to_owned())
+                        .collect::<Vec<_>>();
+                    error!(
+                        "bevy_spine UI owner {:?} proxy {:?} failed to set animation '{}': {:?}. Available animations: {:?}",
+                        owner.0,
+                        event.entity,
+                        animation.name,
+                        err,
+                        available,
+                    );
+                }
             } else {
                 animation_state.clear_track(0);
             }
@@ -566,12 +771,12 @@ fn forward_spine_ui_ready_events(
 
 fn sync_spine_ui_animation_changes(
     mut nodes: Query<
-        (&SpineUiNode, &SpineUiProxy, &mut SpineUiAnimationState),
+        (Entity, &SpineUiNode, &SpineUiProxy, &mut SpineUiAnimationState),
         Changed<SpineUiNode>,
     >,
     mut spine_query: Query<&mut Spine>,
 ) {
-    for (spine_ui, proxy, mut animation_state) in &mut nodes {
+    for (owner, spine_ui, proxy, mut animation_state) in &mut nodes {
         let non_animation_state = SpineUiNonAnimationState::from(spine_ui);
         let animation_unchanged = animation_state.last_applied == spine_ui.animation;
         let non_animation_changed = animation_state.last_non_animation != Some(non_animation_state);
@@ -587,15 +792,30 @@ fn sync_spine_ui_animation_changes(
 
         let Spine(SkeletonController {
             animation_state: spine_animation_state,
+            skeleton,
             ..
         }) = spine.as_mut();
 
         if let Some(animation) = spine_ui.animation.as_ref() {
-            let _ = spine_animation_state.set_animation_by_name(
+            if let Err(err) = spine_animation_state.set_animation_by_name(
                 0,
                 animation.name.as_str(),
                 animation.repeat,
-            );
+            ) {
+                let available = skeleton
+                    .data()
+                    .animations()
+                    .map(|entry| entry.name().to_owned())
+                    .collect::<Vec<_>>();
+                error!(
+                    "bevy_spine UI owner {:?} proxy {:?} failed to set animation '{}': {:?}. Available animations: {:?}",
+                    owner,
+                    proxy.proxy_entity,
+                    animation.name,
+                    err,
+                    available,
+                );
+            }
         } else {
             spine_animation_state.clear_track(0);
         }
@@ -618,7 +838,6 @@ fn cleanup_spine_ui_proxies(
             Or<(
                 With<SpineUiProxy>,
                 With<ViewportNode>,
-                With<SpineUiDebugState>,
                 With<SpineUiAnimationState>,
             )>,
         ),
@@ -642,7 +861,6 @@ fn cleanup_spine_ui_proxies(
         commands.entity(entity).remove::<(
             SpineUiProxy,
             ViewportNode,
-            SpineUiDebugState,
             SpineUiAnimationState,
         )>();
     }

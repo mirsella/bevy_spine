@@ -40,6 +40,9 @@ bevy = { version = "0.17", default-features = true, features = [
 resolver = "2"
 members = ["ci"]
 
+[patch.crates-io]
+bevy = { git = "https://github.com/mirsella/bevy", branch = "release-0.17.3" }
+
 [[example]]
 name = "ui_showcase"
 required-features = ["ui"]
