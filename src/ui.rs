@@ -2,12 +2,13 @@ use bevy::{
     asset::RenderAssetUsages,
     camera::{visibility::{RenderLayers, VisibilitySystems}, ClearColorConfig, RenderTarget},
     image::Image,
-    picking::pointer::PointerId,
     platform::collections::{HashMap, HashSet},
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     ui::{widget::ViewportNode, ContentSize, UiSystems},
 };
+#[cfg(feature = "ui_picking_backend")]
+use bevy::picking::pointer::PointerId;
 
 use crate::{
     Crossfades, SkeletonController, SkeletonData, SkeletonDataHandle, Spine, SpineBone,
@@ -390,6 +391,7 @@ fn setup_spine_ui_nodes(
             },
             SpineUiAnimationState::default(),
         ));
+        #[cfg(feature = "ui_picking_backend")]
         entity_commands.remove::<PointerId>();
 
         if let Some(auto_size) = spine_ui.auto_size {
@@ -612,14 +614,15 @@ fn sync_spine_ui_proxies(
         *skeleton.color_mut() = rusty_spine::Color::new_rgba(r, g, b, a);
 
         let data = skeleton.data();
-        let mut setup_min = Vec2::new(data.x(), data.y());
-        let mut setup_size = Vec2::new(data.width().abs(), data.height().abs());
+        let mut setup_min = cached_bounds
+            .map(|bounds| bounds.min)
+            .unwrap_or_else(|| Vec2::new(data.x(), data.y()));
+        let mut setup_size = cached_bounds
+            .map(|bounds| bounds.size.max(Vec2::ONE))
+            .unwrap_or_else(|| Vec2::new(data.width().abs(), data.height().abs()));
 
-        if setup_size.x <= f32::EPSILON || setup_size.y <= f32::EPSILON {
-            if let Some(cached_bounds) = cached_bounds {
-                setup_min = cached_bounds.min;
-                setup_size = cached_bounds.size.max(Vec2::ONE);
-            } else {
+        if cached_bounds.is_none() {
+            if setup_size.x <= f32::EPSILON || setup_size.y <= f32::EPSILON {
                 let mut fallback_min = Vec2::splat(f32::INFINITY);
                 let mut fallback_max = Vec2::splat(f32::NEG_INFINITY);
                 let mut found_vertices = false;
@@ -656,16 +659,17 @@ fn sync_spine_ui_proxies(
                 if found_vertices {
                     setup_min = fallback_min;
                     setup_size = (fallback_max - fallback_min).abs().max(Vec2::ONE);
-                    commands.entity(proxy_entity).insert(SpineUiCachedBounds {
-                        min: setup_min,
-                        size: setup_size,
-                    });
                 } else {
                     setup_size = setup_size.max(Vec2::ONE);
                 }
+            } else {
+                setup_size = setup_size.max(Vec2::ONE);
             }
-        } else {
-            setup_size = setup_size.max(Vec2::ONE);
+
+            commands.entity(proxy_entity).insert(SpineUiCachedBounds {
+                min: setup_min,
+                size: setup_size,
+            });
         }
 
         let setup_center = setup_min + setup_size * 0.5;

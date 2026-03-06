@@ -17,6 +17,7 @@ exclude = ["assets/*"]
 [features]
 default = []
 ui = ["bevy/bevy_ui"]
+ui_picking_backend = ["bevy/bevy_ui_picking_backend"]
 
 [dependencies]
 rusty_spine = "0.8"
