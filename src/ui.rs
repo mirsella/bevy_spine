@@ -134,11 +134,15 @@ impl Plugin for SpineUiPlugin {
                     resolve_spine_ui_render_layer_conflicts,
                     update_spine_ui_content_size,
                     forward_spine_ui_ready_events,
-                    finalize_ready_spine_ui_proxy_swaps,
                     sync_spine_ui_animation_changes,
                     cleanup_spine_ui_proxies,
                 )
-                    .chain(),
+                    .chain()
+                    .after(crate::SpineSet::OnEvent),
+            )
+            .add_systems(
+                Update,
+                finalize_ready_spine_ui_proxy_swaps.after(crate::SpineSet::OnUpdateMesh),
             )
             .add_systems(
                 PostUpdate,
@@ -238,6 +242,10 @@ struct SpineUiCachedBounds {
 struct SpineUiPendingSwap {
     previous_proxy: Entity,
 }
+
+#[derive(Component, Clone, Copy, Debug, Default, Reflect)]
+#[reflect(Component, Default)]
+struct SpineUiReadyToSwap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SpineUiNonAnimationState {
@@ -403,97 +411,116 @@ fn setup_spine_ui_nodes(
 #[allow(clippy::type_complexity)]
 fn sync_changed_spine_ui_proxy_sources(
     mut commands: Commands,
-    nodes: Query<
-        (Entity, &SpineUiSkeleton, &Crossfades, &SpineSettings, &SpineUiProxy),
-        (
-            With<SpineUiNode>,
-            With<SpineUiProxy>,
-            Or<(
-                Changed<SpineUiSkeleton>,
-                Changed<Crossfades>,
-                Changed<SpineSettings>,
-            )>,
-        ),
-    >,
+    mut queries: ParamSet<(
+        Query<
+            (Entity, &SpineUiSkeleton, &Crossfades, &SpineSettings, &SpineUiProxy),
+            (
+                With<SpineUiNode>,
+                With<SpineUiProxy>,
+                Or<(
+                    Changed<SpineUiSkeleton>,
+                    Changed<Crossfades>,
+                    Changed<SpineSettings>,
+                )>,
+            ),
+        >,
+        Query<&mut SpineUiProxy>,
+    )>,
     proxy_layers: Query<&RenderLayers>,
     proxy_cached_bounds: Query<&SpineUiCachedBounds>,
-    mut proxy_spines: Query<&mut Spine>,
+    pending_swaps: Query<&SpineUiPendingSwap>,
 ) {
-    for (owner, skeleton, crossfades, settings, proxy) in &nodes {
-        let Ok(render_layers) = proxy_layers.get(proxy.proxy_entity).cloned() else {
-            error!(
-                "bevy_spine UI owner {:?} changed source but proxy {:?} is missing RenderLayers; skipping proxy respawn",
+    let mut pending_replacements = Vec::new();
+    {
+        let nodes = queries.p0();
+        for (owner, skeleton, crossfades, settings, proxy) in &nodes {
+            let previous_visible_proxy = pending_swaps
+                .get(proxy.proxy_entity)
+                .map(|pending| pending.previous_proxy)
+                .unwrap_or(proxy.proxy_entity);
+
+            let Ok(render_layers) = proxy_layers.get(previous_visible_proxy).cloned() else {
+                error!(
+                    "bevy_spine UI owner {:?} changed source but proxy {:?} is missing RenderLayers; skipping proxy respawn",
+                    owner,
+                    previous_visible_proxy
+                );
+                continue;
+            };
+
+            pending_replacements.push((
                 owner,
-                proxy.proxy_entity
-            );
-            continue;
-        };
-        let cached_bounds = proxy_cached_bounds.get(proxy.proxy_entity).copied().ok();
-
-        if let Ok(mut old_spine) = proxy_spines.get_mut(proxy.proxy_entity) {
-            old_spine.animation_state.clear_track(0);
+                skeleton.0.clone(),
+                crossfades.clone(),
+                *settings,
+                previous_visible_proxy,
+                render_layers,
+                proxy_cached_bounds.get(proxy.proxy_entity).copied().ok().or_else(|| {
+                    proxy_cached_bounds.get(previous_visible_proxy).copied().ok()
+                }),
+            ));
         }
+    }
 
-        let mut proxy_settings = *settings;
+    for (owner, skeleton, crossfades, settings, previous_proxy, render_layers, cached_bounds) in pending_replacements {
+        let mut proxy_settings = settings;
         proxy_settings.mesh_type = crate::SpineMeshType::Mesh2D;
         proxy_settings.update_meshes_when_invisible = true;
 
         let mut proxy_commands = commands.spawn((
-                SkeletonDataHandle(skeleton.0.clone()),
-                crossfades.clone(),
-                proxy_settings,
-                Transform::default(),
-                GlobalTransform::default(),
-                Visibility::Hidden,
-                InheritedVisibility::default(),
-                ViewVisibility::default(),
-                SpineLoader::without_children(),
-                SpineRenderOwner,
-                render_layers,
-                SpineUiOwnedBy(owner),
-                SpineUiPendingSwap {
-                    previous_proxy: proxy.proxy_entity,
-                },
-            ));
+            SkeletonDataHandle(skeleton),
+            crossfades,
+            proxy_settings,
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::Hidden,
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+            SpineLoader::without_children(),
+            SpineRenderOwner,
+            render_layers,
+            SpineUiOwnedBy(owner),
+            SpineUiPendingSwap {
+                previous_proxy,
+            },
+        ));
 
         if let Some(cached_bounds) = cached_bounds {
             proxy_commands.insert(cached_bounds);
         }
 
-        let _ = proxy_commands.id();
+        let proxy_entity = proxy_commands.id();
+
+        if let Ok(mut owner_proxy) = queries.p1().get_mut(owner) {
+            owner_proxy.proxy_entity = proxy_entity;
+        }
     }
 }
 
 fn finalize_ready_spine_ui_proxy_swaps(
     mut commands: Commands,
-    mut spine_ready_events: MessageReader<SpineReadyEvent>,
-    pending_swaps: Query<(&SpineUiPendingSwap, &SpineUiOwnedBy)>,
-    mut owner_proxies: Query<&mut SpineUiProxy>,
+    pending_swaps: Query<(Entity, &SpineUiPendingSwap, &SpineUiOwnedBy), With<SpineUiReadyToSwap>>,
+    owner_proxies: Query<&SpineUiProxy>,
 ) {
-    for event in spine_ready_events.read() {
-        let Ok((pending_swap, owner)) = pending_swaps.get(event.entity) else {
-            continue;
-        };
-
-        let Ok(mut owner_proxy) = owner_proxies.get_mut(owner.0) else {
-            if let Ok(mut entity_commands) = commands.get_entity(event.entity) {
+    for (entity, pending_swap, owner) in &pending_swaps {
+        let Ok(owner_proxy) = owner_proxies.get(owner.0) else {
+            if let Ok(mut entity_commands) = commands.get_entity(entity) {
                 entity_commands.despawn();
             }
             continue;
         };
 
-        if owner_proxy.proxy_entity != pending_swap.previous_proxy {
-            if let Ok(mut entity_commands) = commands.get_entity(event.entity) {
+        if owner_proxy.proxy_entity != entity {
+            if let Ok(mut entity_commands) = commands.get_entity(entity) {
                 entity_commands.despawn();
             }
             continue;
         }
 
-        owner_proxy.proxy_entity = event.entity;
-
-        if let Ok(mut new_proxy_commands) = commands.get_entity(event.entity) {
+        if let Ok(mut new_proxy_commands) = commands.get_entity(entity) {
             new_proxy_commands
                 .remove::<SpineUiPendingSwap>()
+                .remove::<SpineUiReadyToSwap>()
                 .insert(Visibility::Visible);
         }
 
@@ -588,6 +615,7 @@ fn sync_spine_ui_proxies(
         &mut Spine,
         &SpineSettings,
         Option<&SpineUiCachedBounds>,
+        Option<&SpineUiPendingSwap>,
     )>,
     mut camera_query: Query<&mut Camera>,
 ) {
@@ -603,6 +631,7 @@ fn sync_spine_ui_proxies(
             mut spine,
             proxy_settings,
             cached_bounds,
+            pending_swap,
         )) =
             proxy_query.get_mut(proxy.proxy_entity)
         else {
@@ -674,7 +703,7 @@ fn sync_spine_ui_proxies(
 
         let setup_center = setup_min + setup_size * 0.5;
 
-        *proxy_visibility = if !inherited_visibility.get() {
+        *proxy_visibility = if pending_swap.is_some() || !inherited_visibility.get() {
             Visibility::Hidden
         } else {
             Visibility::Visible
@@ -713,9 +742,11 @@ fn sync_spine_ui_proxies(
 }
 
 fn forward_spine_ui_ready_events(
+    mut commands: Commands,
     mut spine_ready_events: MessageReader<SpineReadyEvent>,
     mut spine_ui_ready_events: MessageWriter<SpineUiReadyEvent>,
     owner_query: Query<&SpineUiOwnedBy>,
+    pending_swap_query: Query<(), With<SpineUiPendingSwap>>,
     node_query: Query<&SpineUiNode>,
     mut animation_state_query: Query<&mut SpineUiAnimationState>,
     mut spine_query: Query<&mut Spine>,
@@ -766,6 +797,10 @@ fn forward_spine_ui_ready_events(
             }
         }
 
+        if pending_swap_query.contains(event.entity) {
+            commands.entity(event.entity).insert(SpineUiReadyToSwap);
+        }
+
         spine_ui_ready_events.write(SpineUiReadyEvent {
             entity: owner.0,
             proxy_entity: event.entity,
@@ -783,9 +818,8 @@ fn sync_spine_ui_animation_changes(
     for (owner, spine_ui, proxy, mut animation_state) in &mut nodes {
         let non_animation_state = SpineUiNonAnimationState::from(spine_ui);
         let animation_unchanged = animation_state.last_applied == spine_ui.animation;
-        let non_animation_changed = animation_state.last_non_animation != Some(non_animation_state);
 
-        if animation_unchanged && non_animation_changed {
+        if animation_unchanged {
             animation_state.last_non_animation = Some(non_animation_state);
             continue;
         }
