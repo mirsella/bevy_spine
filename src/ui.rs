@@ -1,5 +1,3 @@
-#[cfg(feature = "ui_picking_backend")]
-use bevy::picking::pointer::PointerId;
 use bevy::{
     asset::RenderAssetUsages,
     camera::{
@@ -7,6 +5,7 @@ use bevy::{
         visibility::{RenderLayers, VisibilitySystems},
     },
     image::Image,
+    picking::pointer::{PointerId, PointerInteraction, PointerLocation, PointerPress},
     platform::collections::{HashMap, HashSet},
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
@@ -398,8 +397,15 @@ fn setup_spine_ui_nodes(
             },
             SpineUiAnimationState::default(),
         ));
-        #[cfg(feature = "ui_picking_backend")]
-        entity_commands.remove::<PointerId>();
+        // `ViewportNode` can auto-insert Bevy UI picking state. Spine UI is
+        // render-only, and keeping those components on the owner node can
+        // break viewport output.
+        entity_commands.remove::<(
+            PointerId,
+            PointerLocation,
+            PointerPress,
+            PointerInteraction,
+        )>();
 
         if let Some(auto_size) = spine_ui.auto_size {
             entity_commands.insert(ContentSize::fixed_size(auto_size));
