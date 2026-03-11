@@ -50,7 +50,19 @@ var texture_sampler: sampler;
 fn fragment(
     input: VertexOutput,
 ) -> @location(0) vec4<f32> {
-    let tex_color = textureSample(texture, texture_sampler, input.uv);
+    var tex_color = textureSample(texture, texture_sampler, input.uv);
+    #ifdef WEB_UNPREMULTIPLY_TEXTURE
+    // Browser WebGPU can behave as if straight-alpha Spine atlas texels were
+    // uploaded premultiplied. Undo that before applying the normal non-PMA
+    // Spine color math so translucent overlays do not wash out. The upload can
+    // happen in nonlinear/sRGB space, so convert back to sRGB first, divide by
+    // alpha there, then return to linear.
+    if tex_color.a > 0.0 {
+        let srgb = pow(max(tex_color.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+        let straight_srgb = srgb / tex_color.a;
+        tex_color = vec4(pow(max(straight_srgb, vec3<f32>(0.0)), vec3<f32>(2.2)), tex_color.a);
+    }
+    #endif
     var color = vec4(
         ((tex_color.a - 1.0) * input.dark_color.a + 1.0 - tex_color.rgb) * input.dark_color.rgb + tex_color.rgb * input.color.rgb,
         tex_color.a * input.color.a,

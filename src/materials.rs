@@ -180,6 +180,11 @@ macro_rules! material {
                 let vertex_buffer_layout = layout.0.get_layout(&vertex_attributes)?;
                 descriptor.vertex.buffers = vec![vertex_buffer_layout];
                 if let Some(fragment) = &mut descriptor.fragment {
+                    if cfg!(target_arch = "wasm32") && !$premultiplied_alpha {
+                        // Only straight-alpha Spine pages need the browser
+                        // WebGPU un-premultiply workaround.
+                        fragment.shader_defs.push("WEB_UNPREMULTIPLY_TEXTURE".into());
+                    }
                     if let Some(target_state) = &mut fragment.targets[0] {
                         target_state.blend = Some($blend_state);
                     }

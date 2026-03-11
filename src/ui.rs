@@ -400,12 +400,7 @@ fn setup_spine_ui_nodes(
         // `ViewportNode` can auto-insert Bevy UI picking state. Spine UI is
         // render-only, and keeping those components on the owner node can
         // break viewport output.
-        entity_commands.remove::<(
-            PointerId,
-            PointerLocation,
-            PointerPress,
-            PointerInteraction,
-        )>();
+        entity_commands.remove::<(PointerId, PointerLocation, PointerPress, PointerInteraction)>();
 
         if let Some(auto_size) = spine_ui.auto_size {
             entity_commands.insert(ContentSize::fixed_size(auto_size));
