@@ -17,6 +17,10 @@ exclude = ["assets/*"]
 [features]
 default = []
 ui = ["bevy/bevy_ui", "bevy/bevy_picking"]
+# Forward the app's backend selection so wasm-only shader workarounds can stay
+# backend-specific without adding runtime renderer detection here.
+webgpu = ["bevy/webgpu"]
+webgl2 = ["bevy/webgl2"]
 
 [dependencies]
 rusty_spine = "0.8"
