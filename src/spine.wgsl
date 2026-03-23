@@ -57,12 +57,23 @@ fn fragment(
     // Spine color math so translucent overlays do not wash out. The upload can
     // happen in nonlinear/sRGB space, so convert back to sRGB first, divide by
     // alpha there, then return to linear. Clamp to the sampled alpha first so
-    // filtered edge texels do not amplify hidden RGB into bright fringes.
+    // low-alpha edge texels do not amplify hidden RGB into white fringes.
     if tex_color.a > 0.0 {
         let srgb = pow(max(tex_color.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
         let premultiplied_srgb = min(srgb, vec3<f32>(tex_color.a));
         let straight_srgb = premultiplied_srgb / tex_color.a;
-        tex_color = vec4(pow(max(straight_srgb, vec3<f32>(0.0)), vec3<f32>(2.2)), tex_color.a);
+        let corrected_rgb = pow(max(straight_srgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+
+        #ifdef WEB_EDGE_SAFE_UNPREMULTIPLY_TEXTURE
+        let correction = smoothstep(0.45, 0.9, tex_color.a)
+            * tex_color.a * tex_color.a * tex_color.a;
+        tex_color = vec4(
+            tex_color.rgb + (corrected_rgb - tex_color.rgb) * correction,
+            tex_color.a,
+        );
+        #else
+        tex_color = vec4(corrected_rgb, tex_color.a);
+        #endif
     }
     #endif
     var color = vec4(

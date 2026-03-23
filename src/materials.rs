@@ -188,6 +188,12 @@ macro_rules! material {
                         // these atlases correctly and should keep the normal
                         // straight-alpha path.
                         fragment.shader_defs.push("WEB_UNPREMULTIPLY_TEXTURE".into());
+
+                        if matches!($blend_mode, BlendMode::Normal) {
+                            fragment
+                                .shader_defs
+                                .push("WEB_EDGE_SAFE_UNPREMULTIPLY_TEXTURE".into());
+                        }
                     }
                     if let Some(target_state) = &mut fragment.targets[0] {
                         target_state.blend = Some($blend_state);
