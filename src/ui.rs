@@ -4,6 +4,7 @@ use bevy::{
         ClearColorConfig, RenderTarget,
         visibility::{RenderLayers, VisibilitySystems},
     },
+    ecs::schedule::ApplyDeferred,
     image::Image,
     picking::pointer::{PointerId, PointerInteraction, PointerLocation, PointerPress},
     platform::collections::{HashMap, HashSet},
@@ -126,13 +127,18 @@ impl Plugin for SpineUiPlugin {
             .init_resource::<SpineUiRenderLayerManager>()
             .add_message::<SpineUiReadyEvent>()
             .add_observer(on_external_render_layers_removed)
+            .add_systems(First, retire_old_spine_ui_proxies)
             .add_systems(
                 Update,
                 (
                     bootstrap_external_render_layers,
                     sync_changed_external_render_layers,
-                    sync_changed_spine_ui_proxy_sources,
                     setup_spine_ui_nodes,
+                    sync_changed_spine_ui_proxy_sources,
+                    ApplyDeferred,
+                    crate::spine_spawn,
+                    ApplyDeferred,
+                    crate::spine_ready,
                     resolve_spine_ui_render_layer_conflicts,
                     update_spine_ui_content_size,
                     forward_spine_ui_ready_events,
@@ -140,7 +146,8 @@ impl Plugin for SpineUiPlugin {
                     cleanup_spine_ui_proxies,
                 )
                     .chain()
-                    .after(crate::SpineSet::OnEvent),
+                    .after(crate::SpineSet::OnEvent)
+                    .before(crate::SpineSet::OnUpdateMesh),
             )
             .add_systems(
                 Update,
@@ -245,6 +252,9 @@ struct SpineUiPendingSwap {
     previous_proxy: Entity,
 }
 
+#[derive(Component)]
+struct SpineUiRetireNextFrame;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SpineUiNonAnimationState {
     fit: SpineUiFit,
@@ -274,6 +284,16 @@ impl From<&SpineUiNode> for SpineUiNonAnimationState {
 pub struct SpineUiReadyEvent {
     pub entity: Entity,
     pub proxy_entity: Entity,
+}
+
+fn apply_spine_ui_pose(
+    animation_state: &mut crate::rusty_spine::AnimationState,
+    skeleton: &mut crate::rusty_spine::Skeleton,
+) {
+    skeleton.set_to_setup_pose();
+    animation_state.apply(skeleton);
+    skeleton.update(0.0);
+    skeleton.update_world_transform(rusty_spine::Physics::Pose);
 }
 
 #[derive(Component, Clone, Copy, Reflect)]
@@ -542,8 +562,17 @@ fn finalize_ready_spine_ui_proxy_swaps(
         }
 
         if let Ok(mut old_proxy_commands) = commands.get_entity(pending_swap.previous_proxy) {
-            old_proxy_commands.despawn();
+            old_proxy_commands.insert(SpineUiRetireNextFrame);
         }
+    }
+}
+
+fn retire_old_spine_ui_proxies(
+    mut commands: Commands,
+    retired_proxies: Query<Entity, With<SpineUiRetireNextFrame>>,
+) {
+    for entity in &retired_proxies {
+        commands.entity(entity).despawn();
     }
 }
 
@@ -809,6 +838,8 @@ fn forward_spine_ui_ready_events(
                 animation_state.clear_track(0);
             }
 
+            apply_spine_ui_pose(animation_state, skeleton);
+
             if let Ok(mut applied) = animation_state_query.get_mut(owner.0) {
                 applied.last_applied = spine_ui.animation.clone();
                 applied.last_non_animation = Some(SpineUiNonAnimationState::from(spine_ui));
@@ -872,6 +903,8 @@ fn sync_spine_ui_animation_changes(
         } else {
             spine_animation_state.clear_track(0);
         }
+
+        apply_spine_ui_pose(spine_animation_state, skeleton);
 
         animation_state.last_applied = spine_ui.animation.clone();
         animation_state.last_non_animation = Some(non_animation_state);
