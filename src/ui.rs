@@ -119,6 +119,7 @@ impl SpineUiRenderLayerManager {
 impl Plugin for SpineUiPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SpineUiNode>()
+            .register_type::<SpineUiBounds>()
             .register_type::<SpineUiSkeleton>()
             .register_type::<SpineUiFit>()
             .register_type::<SpineUiAnimation>()
@@ -166,6 +167,7 @@ impl Plugin for SpineUiPlugin {
 #[require(Node, Crossfades, SpineSettings)]
 #[reflect(Component, Default)]
 pub struct SpineUiNode {
+    pub bounds: Option<SpineUiBounds>,
     pub fit: SpineUiFit,
     pub auto_size: Option<Vec2>,
     pub reference_size: Option<Vec2>,
@@ -186,9 +188,22 @@ impl Default for SpineUiSkeleton {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+pub struct SpineUiBounds {
+    pub min: Vec2,
+    pub size: Vec2,
+}
+
+impl SpineUiBounds {
+    pub const fn new(min: Vec2, size: Vec2) -> Self {
+        Self { min, size }
+    }
+}
+
 impl Default for SpineUiNode {
     fn default() -> Self {
         Self {
+            bounds: None,
             fit: SpineUiFit::Contain,
             auto_size: Some(Vec2::new(300.0, 420.0)),
             reference_size: None,
@@ -257,6 +272,7 @@ struct SpineUiRetireNextFrame;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SpineUiNonAnimationState {
+    bounds: Option<SpineUiBounds>,
     fit: SpineUiFit,
     auto_size: Option<Vec2>,
     reference_size: Option<Vec2>,
@@ -269,6 +285,7 @@ struct SpineUiNonAnimationState {
 impl From<&SpineUiNode> for SpineUiNonAnimationState {
     fn from(node: &SpineUiNode) -> Self {
         Self {
+            bounds: node.bounds,
             fit: node.fit,
             auto_size: node.auto_size,
             reference_size: node.reference_size,
@@ -695,15 +712,18 @@ fn sync_spine_ui_proxies(
         let [r, g, b, a] = spine_ui.tint.to_linear().to_f32_array();
         *skeleton.color_mut() = rusty_spine::Color::new_rgba(r, g, b, a);
 
+        let explicit_bounds = spine_ui.bounds;
         let data = skeleton.data();
-        let mut setup_min = cached_bounds
+        let mut setup_min = explicit_bounds
             .map(|bounds| bounds.min)
+            .or_else(|| cached_bounds.map(|bounds| bounds.min))
             .unwrap_or_else(|| Vec2::new(data.x(), data.y()));
-        let mut setup_size = cached_bounds
+        let mut setup_size = explicit_bounds
             .map(|bounds| bounds.size.max(Vec2::ONE))
+            .or_else(|| cached_bounds.map(|bounds| bounds.size.max(Vec2::ONE)))
             .unwrap_or_else(|| Vec2::new(data.width().abs(), data.height().abs()));
 
-        if cached_bounds.is_none() {
+        if explicit_bounds.is_none() && cached_bounds.is_none() {
             if setup_size.x <= f32::EPSILON || setup_size.y <= f32::EPSILON {
                 let mut fallback_min = Vec2::splat(f32::INFINITY);
                 let mut fallback_max = Vec2::splat(f32::NEG_INFINITY);
