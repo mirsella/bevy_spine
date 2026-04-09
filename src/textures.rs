@@ -1,6 +1,9 @@
 //! Events related to textures loaded by Spine.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use bevy::prelude::*;
 use rusty_spine::atlas::{AtlasFilter, AtlasWrap};
@@ -29,6 +32,7 @@ pub struct SpineTextureConfig {
 #[derive(Resource)]
 pub(crate) struct SpineTextures {
     data: Arc<Mutex<SpineTexturesData>>,
+    handles: HashMap<String, Handle<Image>>,
 }
 
 /// An [`Event`] fired for each texture loaded by Spine.
@@ -53,7 +57,6 @@ pub struct SpineTextureDisposeEvent {
 
 #[derive(Default)]
 pub(crate) struct SpineTexturesData {
-    handles: Vec<(String, Handle<Image>)>,
     remember: Vec<SpineTextureInternal>,
     forget: Vec<String>,
 }
@@ -89,11 +92,18 @@ impl SpineTextures {
             page.renderer_object().dispose::<SpineTexture>();
         });
 
-        Self { data }
+        Self {
+            data,
+            handles: HashMap::new(),
+        }
+    }
+
+    pub fn handle(&self, path: &str) -> Option<Handle<Image>> {
+        self.handles.get(path).cloned()
     }
 
     pub fn update(
-        &self,
+        &mut self,
         asset_server: &AssetServer,
         atlases: &mut Assets<Atlas>,
         create_events: &mut MessageWriter<SpineTextureCreateEvent>,
@@ -104,7 +114,7 @@ impl SpineTextures {
             let handle = asset_server.load(&texture.path);
             // if none, the atlas was already deleted before getting here
             if let Some(atlas) = find_matching_atlas(atlases, texture.atlas_address) {
-                data.handles.push((texture.path.clone(), handle.clone()));
+                self.handles.insert(texture.path.clone(), handle.clone());
                 create_events.write(SpineTextureCreateEvent {
                     path: texture.path,
                     atlas,
@@ -114,12 +124,11 @@ impl SpineTextures {
             }
         }
         while let Some(texture_path) = data.forget.pop() {
-            if let Some(index) = data.handles.iter().position(|i| i.0 == texture_path) {
+            if let Some(handle) = self.handles.remove(&texture_path) {
                 dispose_events.write(SpineTextureDisposeEvent {
-                    path: texture_path,
-                    handle: data.handles[index].1.clone(),
+                    path: texture_path.clone(),
+                    handle,
                 });
-                data.handles.remove(index);
             }
         }
     }

@@ -48,6 +48,24 @@ pub use crate::ui::*;
 
 pub use rusty_spine;
 
+fn required_mesh_count(
+    drawer: SpineDrawer,
+    slot_count: usize,
+    renderable_count: usize,
+) -> usize {
+    match drawer {
+        SpineDrawer::None => 0,
+        SpineDrawer::Combined => renderable_count.max(1),
+        SpineDrawer::Separated => slot_count.max(1),
+    }
+}
+
+fn spine_texture_handle(texture_path: &str, spine_textures: &SpineTextures) -> Handle<Image> {
+    spine_textures
+        .handle(texture_path)
+        .unwrap_or_else(|| panic!("missing cached spine texture handle for {texture_path}"))
+}
+
 /// System sets for Spine systems.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy, SystemSet)]
 pub enum SpineSystem {
@@ -489,7 +507,7 @@ fn spine_load(
     mut atlases: ResMut<Assets<Atlas>>,
     jsons: Res<Assets<SkeletonJson>>,
     binaries: Res<Assets<SkeletonBinary>>,
-    spine_textures: Res<SpineTextures>,
+    mut spine_textures: ResMut<SpineTextures>,
     asset_server: Res<AssetServer>,
 ) {
     // check if any assets are loading, else, early out to avoid triggering change detection
@@ -572,6 +590,7 @@ fn spine_spawn(
         &mut SpineLoader,
         Entity,
         &SkeletonDataHandle,
+        Option<&SpineSettings>,
         Option<&Crossfades>,
         Option<&RenderLayers>,
         Option<&SpineRenderOwner>,
@@ -582,7 +601,7 @@ fn spine_spawn(
     mut skeleton_data_assets: ResMut<Assets<SkeletonData>>,
     spine_event_queue: Res<SpineEventQueue>,
 ) {
-    for (mut spine_loader, spine_entity, data_handle, crossfades, render_layers, render_owner) in
+    for (mut spine_loader, spine_entity, data_handle, spine_settings, crossfades, render_layers, render_owner) in
         skeleton_query.iter_mut()
     {
         if let SpineLoader::Loading { with_children } = spine_loader.as_ref() {
@@ -607,6 +626,7 @@ fn spine_spawn(
                             .with_cull_direction(CullDirection::CounterClockwise)
                             .with_premultiplied_alpha(skeleton_data_asset.premultiplied_alpha),
                     );
+                    let settings = spine_settings.copied().unwrap_or_default();
                     let events = spine_event_queue.0.clone();
                     controller
                         .animation_state
@@ -700,38 +720,20 @@ fn spine_spawn(
                                 spine_meshes_commands.with_children(|parent| {
                                     let render_layers_for_meshes =
                                         render_layers_for_children.clone();
-                                    let mut z = 0.;
-                                    for (index, _) in controller.skeleton.slots().enumerate() {
-                                        let mut mesh = Mesh::new(
-                                            PrimitiveTopology::TriangleList,
-                                            RenderAssetUsages::MAIN_WORLD
-                                                | RenderAssetUsages::RENDER_WORLD,
-                                        );
-                                        empty_mesh(&mut mesh);
-                                        let mesh_handle = meshes.add(mesh);
-                                        let mut mesh_commands = parent.spawn((
-                                            Name::new(format!("spine_mesh {index}")),
-                                            SpineMesh {
-                                                spine_entity,
-                                                handle: mesh_handle.clone(),
-                                                state: SpineMeshState::Empty,
-                                            },
-                                            Transform::from_xyz(0., 0., z),
-                                            GlobalTransform::default(),
-                                            Visibility::default(),
-                                            InheritedVisibility::default(),
-                                            ViewVisibility::default(),
-                                        ));
-
-                                        if let Some(render_layers) = &render_layers_for_meshes {
-                                            mesh_commands.insert(render_layers.clone());
-                                        }
-                                        if let Some(render_owner) = render_owner {
-                                            mesh_commands.insert(render_owner);
-                                        }
-
-                                        z += 0.001;
-                                    }
+                                    let initial_mesh_count = required_mesh_count(
+                                        settings.drawer,
+                                        controller.skeleton.slots().count(),
+                                        controller.combined_renderables().len(),
+                                    );
+                                    spawn_spine_mesh_children(
+                                        parent,
+                                        &mut meshes,
+                                        spine_entity,
+                                        initial_mesh_count,
+                                        &render_layers_for_meshes,
+                                        render_owner,
+                                        0,
+                                    );
                                 });
                                 if *with_children {
                                     spawn_bones(
@@ -826,6 +828,48 @@ fn spawn_bones(
     }
 }
 
+fn spawn_spine_mesh_children(
+    spawner: &mut ChildSpawnerCommands<'_>,
+    meshes: &mut Assets<Mesh>,
+    spine_entity: Entity,
+    mesh_count: usize,
+    render_layers: &Option<RenderLayers>,
+    render_owner: Option<SpineRenderOwner>,
+    start_index: usize,
+) {
+    let mut z = start_index as f32 * 0.001;
+    for index in start_index..start_index + mesh_count {
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+        );
+        empty_mesh(&mut mesh);
+        let mesh_handle = meshes.add(mesh);
+        let mut mesh_commands = spawner.spawn((
+            Name::new(format!("spine_mesh {index}")),
+            SpineMesh {
+                spine_entity,
+                handle: mesh_handle.clone(),
+                state: SpineMeshState::Empty,
+            },
+            Transform::from_xyz(0., 0., z),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+        ));
+
+        if let Some(render_layers) = render_layers {
+            mesh_commands.insert(render_layers.clone());
+        }
+        if let Some(render_owner) = render_owner {
+            mesh_commands.insert(render_owner);
+        }
+
+        z += 0.001;
+    }
+}
+
 fn spine_ready(
     mut ready_events: ResMut<SpineReadyEvents>,
     mut ready_writer: MessageWriter<SpineReadyEvent>,
@@ -870,12 +914,22 @@ fn spine_update_meshes(
     )>,
     mesh_visibility_query: Query<&ViewVisibility, With<SpineMesh>>,
     mut commands: Commands,
-    mut meshes_query: Query<(&ChildOf, &Children, &mut SpineMeshesUpdateState), With<SpineMeshes>>,
-    asset_server: Res<AssetServer>,
+    mut meshes_query: Query<
+        (
+            Entity,
+            &ChildOf,
+            &Children,
+            &mut SpineMeshesUpdateState,
+            Option<&RenderLayers>,
+            Option<&SpineRenderOwner>,
+        ),
+        With<SpineMeshes>,
+    >,
+    spine_textures: Res<SpineTextures>,
 ) {
     const CULLED_RECOVERY_INTERVAL_FRAMES: u32 = 60;
 
-    for (meshes_parent, meshes_children, mut update_state) in meshes_query.iter_mut() {
+    for (meshes_entity, meshes_parent, meshes_children, mut update_state, render_layers, render_owner) in meshes_query.iter_mut() {
         let Ok((mut spine, spine_mesh_type, inherited_visibility)) =
             spine_query.get_mut(meshes_parent.parent())
         else {
@@ -917,9 +971,44 @@ fn spine_update_meshes(
             SpineDrawer::Separated => SkeletonRenderableKind::Simple(spine.0.renderables()),
             SpineDrawer::None => continue,
         };
+        let required_mesh_count = required_mesh_count(
+            drawer,
+            spine.skeleton.slots().count(),
+            match &renderables {
+                SkeletonRenderableKind::Combined(renderables) => renderables.len(),
+                SkeletonRenderableKind::Simple(renderables) => renderables.len(),
+            },
+        );
+        let dynamic_mesh_children = drawer == SpineDrawer::Combined;
+        let existing_mesh_count = meshes_children.len();
+        if dynamic_mesh_children && existing_mesh_count < required_mesh_count {
+            if let Ok(mut meshes_entity_commands) = commands.get_entity(meshes_entity) {
+                meshes_entity_commands.with_children(|parent| {
+                    spawn_spine_mesh_children(
+                        parent,
+                        &mut meshes,
+                        meshes_parent.parent(),
+                        required_mesh_count - existing_mesh_count,
+                        &render_layers.cloned(),
+                        render_owner.copied(),
+                        existing_mesh_count,
+                    );
+                });
+            }
+        }
+        if dynamic_mesh_children {
+            for extra_child in meshes_children.iter().skip(required_mesh_count) {
+                if let Ok(mut entity) = commands.get_entity(extra_child) {
+                    entity.try_despawn();
+                }
+            }
+        }
         let mut z = 0.;
         let mut renderable_index = 0;
         for child in meshes_children.iter() {
+            if dynamic_mesh_children && renderable_index >= required_mesh_count {
+                break;
+            }
             if let Ok((
                 spine_mesh_entity,
                 mut spine_mesh,
@@ -1029,7 +1118,10 @@ fn spine_update_meshes(
                     };
                     let spine_texture =
                         unsafe { &mut *(attachment_render_object as *mut SpineTexture) };
-                    let texture_path = spine_texture.0.clone();
+                    let texture_handle = spine_texture_handle(
+                        &spine_texture.0,
+                        &spine_textures,
+                    );
                     let mut normals = vec![];
                     for _ in 0..vertices.len() {
                         normals.push([0., 0., 0.]);
@@ -1046,7 +1138,7 @@ fn spine_update_meshes(
                     spine_mesh.state = SpineMeshState::Renderable {
                         info: SpineMaterialInfo {
                             slot_index,
-                            texture: asset_server.load(texture_path),
+                            texture: texture_handle,
                             blend_mode,
                             premultiplied_alpha,
                         },
