@@ -48,22 +48,12 @@ pub use crate::ui::*;
 
 pub use rusty_spine;
 
-fn required_mesh_count(
-    drawer: SpineDrawer,
-    slot_count: usize,
-    renderable_count: usize,
-) -> usize {
+fn required_mesh_count(drawer: SpineDrawer, slot_count: usize, renderable_count: usize) -> usize {
     match drawer {
         SpineDrawer::None => 0,
         SpineDrawer::Combined => renderable_count.max(1),
         SpineDrawer::Separated => slot_count.max(1),
     }
-}
-
-fn spine_texture_handle(texture_path: &str, spine_textures: &SpineTextures) -> Handle<Image> {
-    spine_textures
-        .handle(texture_path)
-        .unwrap_or_else(|| panic!("missing cached spine texture handle for {texture_path}"))
 }
 
 /// System sets for Spine systems.
@@ -601,8 +591,15 @@ fn spine_spawn(
     mut skeleton_data_assets: ResMut<Assets<SkeletonData>>,
     spine_event_queue: Res<SpineEventQueue>,
 ) {
-    for (mut spine_loader, spine_entity, data_handle, spine_settings, crossfades, render_layers, render_owner) in
-        skeleton_query.iter_mut()
+    for (
+        mut spine_loader,
+        spine_entity,
+        data_handle,
+        spine_settings,
+        crossfades,
+        render_layers,
+        render_owner,
+    ) in skeleton_query.iter_mut()
     {
         if let SpineLoader::Loading { with_children } = spine_loader.as_ref() {
             let skeleton_data_asset =
@@ -925,11 +922,19 @@ fn spine_update_meshes(
         ),
         With<SpineMeshes>,
     >,
-    spine_textures: Res<SpineTextures>,
+    asset_server: Res<AssetServer>,
 ) {
     const CULLED_RECOVERY_INTERVAL_FRAMES: u32 = 60;
 
-    for (meshes_entity, meshes_parent, meshes_children, mut update_state, render_layers, render_owner) in meshes_query.iter_mut() {
+    for (
+        meshes_entity,
+        meshes_parent,
+        meshes_children,
+        mut update_state,
+        render_layers,
+        render_owner,
+    ) in meshes_query.iter_mut()
+    {
         let Ok((mut spine, spine_mesh_type, inherited_visibility)) =
             spine_query.get_mut(meshes_parent.parent())
         else {
@@ -1118,10 +1123,7 @@ fn spine_update_meshes(
                     };
                     let spine_texture =
                         unsafe { &mut *(attachment_render_object as *mut SpineTexture) };
-                    let texture_handle = spine_texture_handle(
-                        &spine_texture.0,
-                        &spine_textures,
-                    );
+                    let texture_handle = asset_server.load(spine_texture.0.clone());
                     let mut normals = vec![];
                     for _ in 0..vertices.len() {
                         normals.push([0., 0., 0.]);

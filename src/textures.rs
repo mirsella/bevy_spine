@@ -1,9 +1,6 @@
 //! Events related to textures loaded by Spine.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use rusty_spine::atlas::{AtlasFilter, AtlasWrap};
@@ -32,7 +29,6 @@ pub struct SpineTextureConfig {
 #[derive(Resource)]
 pub(crate) struct SpineTextures {
     data: Arc<Mutex<SpineTexturesData>>,
-    handles: HashMap<String, Handle<Image>>,
 }
 
 /// An [`Event`] fired for each texture loaded by Spine.
@@ -92,14 +88,7 @@ impl SpineTextures {
             page.renderer_object().dispose::<SpineTexture>();
         });
 
-        Self {
-            data,
-            handles: HashMap::new(),
-        }
-    }
-
-    pub fn handle(&self, path: &str) -> Option<Handle<Image>> {
-        self.handles.get(path).cloned()
+        Self { data }
     }
 
     pub fn update(
@@ -111,10 +100,9 @@ impl SpineTextures {
     ) {
         let mut data = self.data.lock().unwrap();
         while let Some(texture) = data.remember.pop() {
-            let handle = asset_server.load(&texture.path);
+            let handle = asset_server.load(texture.path.as_str());
             // if none, the atlas was already deleted before getting here
             if let Some(atlas) = find_matching_atlas(atlases, texture.atlas_address) {
-                self.handles.insert(texture.path.clone(), handle.clone());
                 create_events.write(SpineTextureCreateEvent {
                     path: texture.path,
                     atlas,
@@ -124,12 +112,10 @@ impl SpineTextures {
             }
         }
         while let Some(texture_path) = data.forget.pop() {
-            if let Some(handle) = self.handles.remove(&texture_path) {
-                dispose_events.write(SpineTextureDisposeEvent {
-                    path: texture_path.clone(),
-                    handle,
-                });
-            }
+            dispose_events.write(SpineTextureDisposeEvent {
+                handle: asset_server.load(texture_path.as_str()),
+                path: texture_path,
+            });
         }
     }
 }
