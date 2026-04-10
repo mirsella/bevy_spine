@@ -1,6 +1,9 @@
 //! Events related to textures loaded by Spine.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    mem::take,
+    sync::{Arc, Mutex},
+};
 
 use bevy::prelude::*;
 use rusty_spine::atlas::{AtlasFilter, AtlasWrap};
@@ -11,10 +14,10 @@ use crate::Atlas;
 pub struct SpineTexture(pub String);
 
 #[derive(Debug)]
-struct SpineTextureInternal {
-    pub path: String,
-    pub atlas_address: usize,
-    pub config: SpineTextureConfig,
+struct PendingSpineTexture {
+    path: String,
+    atlas_address: usize,
+    config: SpineTextureConfig,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -28,7 +31,7 @@ pub struct SpineTextureConfig {
 
 #[derive(Resource)]
 pub(crate) struct SpineTextures {
-    data: Arc<Mutex<SpineTexturesData>>,
+    pending: Arc<Mutex<Vec<PendingSpineTexture>>>,
 }
 
 /// An [`Event`] fired for each texture loaded by Spine.
@@ -42,28 +45,13 @@ pub struct SpineTextureCreateEvent {
     pub config: SpineTextureConfig,
 }
 
-/// An [`Event`] fired for each texture disposed, after [`SpineTextureCreateEvent`].
-///
-/// Sent in [`SpineSystem::Load`](`crate::SpineSystem::Load`).
-#[derive(Debug, Clone, Message)]
-pub struct SpineTextureDisposeEvent {
-    pub path: String,
-    pub handle: Handle<Image>,
-}
-
-#[derive(Default)]
-pub(crate) struct SpineTexturesData {
-    remember: Vec<SpineTextureInternal>,
-    forget: Vec<String>,
-}
-
 impl SpineTextures {
     pub(crate) fn init() -> Self {
-        let data = Arc::new(Mutex::new(SpineTexturesData::default()));
+        let pending = Arc::new(Mutex::new(Vec::new()));
 
-        let data2 = data.clone();
+        let pending_create = pending.clone();
         rusty_spine::extension::set_create_texture_cb(move |page, path| {
-            data2.lock().unwrap().remember.push(SpineTextureInternal {
+            pending_create.lock().unwrap().push(PendingSpineTexture {
                 path: path.to_owned(),
                 atlas_address: page.atlas().c_ptr() as usize,
                 config: SpineTextureConfig {
@@ -77,18 +65,11 @@ impl SpineTextures {
             page.renderer_object().set(SpineTexture(path.to_owned()));
         });
 
-        let data3 = data.clone();
         rusty_spine::extension::set_dispose_texture_cb(move |page| unsafe {
-            data3.lock().unwrap().forget.push(
-                page.renderer_object()
-                    .get_unchecked::<SpineTexture>()
-                    .0
-                    .clone(),
-            );
             page.renderer_object().dispose::<SpineTexture>();
         });
 
-        Self { data }
+        Self { pending }
     }
 
     pub fn update(
@@ -96,25 +77,16 @@ impl SpineTextures {
         asset_server: &AssetServer,
         atlases: &mut Assets<Atlas>,
         create_events: &mut MessageWriter<SpineTextureCreateEvent>,
-        dispose_events: &mut MessageWriter<SpineTextureDisposeEvent>,
     ) {
-        let mut data = self.data.lock().unwrap();
-        while let Some(texture) = data.remember.pop() {
-            let handle = asset_server.load(texture.path.clone());
-            // if none, the atlas was already deleted before getting here
-            if let Some(atlas) = find_matching_atlas(atlases, texture.atlas_address) {
-                create_events.write(SpineTextureCreateEvent {
-                    path: texture.path,
-                    atlas,
-                    handle,
-                    config: texture.config,
-                });
-            }
-        }
-        while let Some(texture_path) = data.forget.pop() {
-            dispose_events.write(SpineTextureDisposeEvent {
-                handle: asset_server.load(texture_path.clone()),
-                path: texture_path,
+        for texture in take(&mut *self.pending.lock().unwrap()) {
+            let Some(atlas) = find_matching_atlas(atlases, texture.atlas_address) else {
+                continue;
+            };
+            create_events.write(SpineTextureCreateEvent {
+                path: texture.path.clone(),
+                handle: asset_server.load(texture.path),
+                atlas,
+                config: texture.config,
             });
         }
     }

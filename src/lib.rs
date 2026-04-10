@@ -35,7 +35,7 @@ use crate::{
     rusty_spine::{
         AnimationStateData, BoneHandle, controller::SkeletonControllerSettings, draw::CullDirection,
     },
-    textures::{SpineTexture, SpineTextureCreateEvent, SpineTextureDisposeEvent, SpineTextures},
+    textures::{SpineTexture, SpineTextureCreateEvent, SpineTextures},
 };
 
 pub use crate::{assets::*, crossfades::Crossfades, entity_sync::*, handle::*, rusty_spine::Color};
@@ -149,7 +149,6 @@ impl Plugin for SpinePlugin {
         .insert_resource(SpineTextures::init())
         .insert_resource(SpineReadyEvents::default())
         .add_message::<SpineTextureCreateEvent>()
-        .add_message::<SpineTextureDisposeEvent>()
         .init_asset::<Atlas>()
         .init_asset::<SkeletonJson>()
         .init_asset::<SkeletonBinary>()
@@ -493,7 +492,6 @@ struct SpineReadyEvents(Vec<SpineReadyEvent>);
 fn spine_load(
     mut skeleton_data_assets: ResMut<Assets<SkeletonData>>,
     mut texture_create_events: MessageWriter<SpineTextureCreateEvent>,
-    mut texture_dispose_events: MessageWriter<SpineTextureDisposeEvent>,
     mut atlases: ResMut<Assets<Atlas>>,
     jsons: Res<Assets<SkeletonJson>>,
     binaries: Res<Assets<SkeletonBinary>>,
@@ -570,7 +568,6 @@ fn spine_load(
         asset_server.as_ref(),
         &mut atlases,
         &mut texture_create_events,
-        &mut texture_dispose_events,
     );
 }
 
