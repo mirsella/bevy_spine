@@ -100,7 +100,7 @@ impl SpineTextures {
     ) {
         let mut data = self.data.lock().unwrap();
         while let Some(texture) = data.remember.pop() {
-            let handle = asset_server.load(texture.path.as_str());
+            let handle = asset_server.load(texture.path.clone());
             // if none, the atlas was already deleted before getting here
             if let Some(atlas) = find_matching_atlas(atlases, texture.atlas_address) {
                 create_events.write(SpineTextureCreateEvent {
@@ -113,7 +113,7 @@ impl SpineTextures {
         }
         while let Some(texture_path) = data.forget.pop() {
             dispose_events.write(SpineTextureDisposeEvent {
-                handle: asset_server.load(texture_path.as_str()),
+                handle: asset_server.load(texture_path.clone()),
                 path: texture_path,
             });
         }
