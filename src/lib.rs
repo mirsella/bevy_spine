@@ -35,7 +35,7 @@ use crate::{
     rusty_spine::{
         AnimationStateData, BoneHandle, controller::SkeletonControllerSettings, draw::CullDirection,
     },
-    textures::{SpineTexture, SpineTextureCreateEvent, SpineTextures},
+    textures::{SpineTextureCreateEvent, SpineTextures},
 };
 
 pub use crate::{assets::*, crossfades::Crossfades, entity_sync::*, handle::*, rusty_spine::Color};
@@ -1118,9 +1118,8 @@ fn spine_update_meshes(
                     let Some(attachment_render_object) = attachment_renderer_object else {
                         break 'render;
                     };
-                    let spine_texture =
-                        unsafe { &mut *(attachment_render_object as *mut SpineTexture) };
-                    let texture_handle = asset_server.load(spine_texture.0.clone());
+                    let texture_path = unsafe { &*(attachment_render_object as *const String) };
+                    let texture_handle = asset_server.load(texture_path.clone());
                     let mut normals = vec![];
                     for _ in 0..vertices.len() {
                         normals.push([0., 0., 0.]);
@@ -1199,8 +1198,7 @@ fn adjust_spine_textures(
             spine_texture_create_event.config,
         ));
     }
-    let mut removed_handles = vec![];
-    for (handle_index, (handle, handle_config)) in local.handles.iter().enumerate() {
+    local.handles.retain(|(handle, handle_config)| {
         if let Some(image) = images.get_mut(handle) {
             fn convert_filter(filter: AtlasFilter) -> ImageFilterMode {
                 match filter {
@@ -1263,12 +1261,11 @@ fn adjust_spine_textures(
                     }
                 }
             }
-            removed_handles.push(handle_index);
+            false
+        } else {
+            true
         }
-    }
-    for removed_handle in removed_handles.into_iter().rev() {
-        local.handles.remove(removed_handle);
-    }
+    });
 }
 
 mod assets;

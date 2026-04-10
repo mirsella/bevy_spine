@@ -11,9 +11,6 @@ use rusty_spine::atlas::{AtlasFilter, AtlasWrap};
 use crate::Atlas;
 
 #[derive(Debug)]
-pub struct SpineTexture(pub String);
-
-#[derive(Debug)]
 struct PendingSpineTexture {
     path: String,
     atlas_address: usize,
@@ -51,8 +48,9 @@ impl SpineTextures {
 
         let pending_create = pending.clone();
         rusty_spine::extension::set_create_texture_cb(move |page, path| {
+            let path = path.to_owned();
             pending_create.lock().unwrap().push(PendingSpineTexture {
-                path: path.to_owned(),
+                path: path.clone(),
                 atlas_address: page.atlas().c_ptr() as usize,
                 config: SpineTextureConfig {
                     premultiplied_alpha: page.pma(),
@@ -62,11 +60,11 @@ impl SpineTextures {
                     v_wrap: page.v_wrap(),
                 },
             });
-            page.renderer_object().set(SpineTexture(path.to_owned()));
+            page.renderer_object().set(path);
         });
 
         rusty_spine::extension::set_dispose_texture_cb(move |page| unsafe {
-            page.renderer_object().dispose::<SpineTexture>();
+            page.renderer_object().dispose::<String>();
         });
 
         Self { pending }
