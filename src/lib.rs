@@ -146,6 +146,7 @@ impl Plugin for SpinePlugin {
         .register_type::<SpineMeshType>()
         .register_type::<SpineDrawer>()
         .init_resource::<SpineEventQueue>()
+        .init_resource::<SpineTextureHandleCache>()
         .insert_resource(SpineTextures::init())
         .insert_resource(SpineReadyEvents::default())
         .add_message::<SpineTextureCreateEvent>()
@@ -210,6 +211,18 @@ impl Plugin for SpinePlugin {
 
 #[derive(Resource, Default)]
 struct SpineEventQueue(Arc<Mutex<VecDeque<SpineEvent>>>);
+
+#[derive(Resource, Default)]
+struct SpineTextureHandleCache(HashMap<String, Handle<Image>>);
+
+impl SpineTextureHandleCache {
+    fn load(&mut self, asset_server: &AssetServer, path: &str) -> Handle<Image> {
+        self.0
+            .entry(path.to_owned())
+            .or_insert_with(|| asset_server.load(path.to_owned()))
+            .clone()
+    }
+}
 
 /// A live Spine [`SkeletonController`] [`Component`], ready to be manipulated.
 ///
@@ -920,6 +933,7 @@ fn spine_update_meshes(
         With<SpineMeshes>,
     >,
     asset_server: Res<AssetServer>,
+    mut texture_handle_cache: ResMut<SpineTextureHandleCache>,
 ) {
     const CULLED_RECOVERY_INTERVAL_FRAMES: u32 = 60;
 
@@ -1119,11 +1133,8 @@ fn spine_update_meshes(
                         break 'render;
                     };
                     let texture_path = unsafe { &*(attachment_render_object as *const String) };
-                    let texture_handle = asset_server.load(texture_path.clone());
-                    let mut normals = vec![];
-                    for _ in 0..vertices.len() {
-                        normals.push([0., 0., 0.]);
-                    }
+                    let texture_handle = texture_handle_cache.load(&asset_server, texture_path);
+                    let normals = vec![[0., 0., 0.]; vertices.len()];
                     mesh.insert_indices(Indices::U16(indices));
                     mesh.insert_attribute(
                         MeshVertexAttribute::new("Vertex_Position", 0, VertexFormat::Float32x2),
@@ -1146,8 +1157,10 @@ fn spine_update_meshes(
                     empty = false;
                 }
                 if empty {
-                    spine_mesh.state = SpineMeshState::Empty;
-                    empty_mesh(mesh);
+                    if !matches!(spine_mesh.state, SpineMeshState::Empty) {
+                        spine_mesh.state = SpineMeshState::Empty;
+                        empty_mesh(mesh);
+                    }
                 }
                 renderable_index += 1;
             }

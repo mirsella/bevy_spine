@@ -32,7 +32,7 @@ pub trait SpineMaterial: Sized {
         + Into<AssetId<Self::Material>>
         + From<Handle<Self::Material>>;
     /// The material type to apply to [`SpineMesh`]. Usually is `Self`.
-    type Material: Asset + Clone;
+    type Material: Asset + Clone + PartialEq;
     /// System parameters to query when updating this material.
     type Params<'w, 's>: SystemParam;
 
@@ -93,29 +93,33 @@ fn update_materials<T: SpineMaterial>(
         let SpineMeshState::Renderable { info: data } = spine_mesh.state.clone() else {
             continue;
         };
-        if let Some((material, handle)) =
-            material_handle.and_then(|handle| materials.get_mut(handle.clone()).zip(Some(handle)))
-        {
-            if let Some(new_material) = T::update(
-                Some(material.clone()),
-                spine_mesh.spine_entity,
-                data,
-                &params,
-            ) {
-                *material = new_material;
-            } else {
+
+        let current = material_handle.and_then(|handle| materials.get(handle.clone()).cloned());
+        let updated = T::update(current.clone(), spine_mesh.spine_entity, data, &params);
+
+        match (material_handle, current, updated) {
+            (Some(handle), Some(current), Some(updated)) => {
+                if current != updated
+                    && let Some(material) = materials.get_mut(handle.clone())
+                {
+                    *material = updated;
+                }
+            }
+            (Some(handle), _, None) => {
                 materials.remove(handle.clone());
                 if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
                     entity_commands.remove::<T::MeshMaterial>();
                 }
             }
-        } else if let Some(material) = T::update(None, spine_mesh.spine_entity, data, &params) {
-            let handle = materials.add(material);
-            if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
-                entity_commands
-                    .insert(<T::MeshMaterial as From<Handle<T::Material>>>::from(handle));
+            (_, _, Some(updated)) => {
+                let handle = materials.add(updated);
+                if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
+                    entity_commands
+                        .insert(<T::MeshMaterial as From<Handle<T::Material>>>::from(handle));
+                }
             }
-        };
+            (None, _, None) => {}
+        }
     }
 }
 
@@ -139,7 +143,7 @@ pub struct SpineSettingsQuery<'w, 's> {
 macro_rules! material {
     ($(#[$($attrss:tt)*])* $name:ident, $blend_mode:expr, $premultiplied_alpha:expr, $blend_state:expr) => {
         $(#[$($attrss)*])*
-        #[derive(Asset, Default, AsBindGroup, TypePath, Clone)]
+        #[derive(Asset, Default, AsBindGroup, TypePath, Clone, PartialEq)]
         pub struct $name {
             #[texture(0)]
             #[sampler(1)]
