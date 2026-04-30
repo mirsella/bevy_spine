@@ -1,11 +1,17 @@
 use bevy::prelude::*;
-use bevy_spine::{SkeletonData, SpinePlugin};
+use bevy_spine::{SkeletonData, SpineCorePlugin, SpineDefaultMaterialPlugin};
 use bullet::BulletPlugin;
 use player::{PlayerPlugin, PlayerSpawnEvent};
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, SpinePlugin, PlayerPlugin, BulletPlugin))
+        .add_plugins((
+            DefaultPlugins,
+            SpineCorePlugin,
+            SpineDefaultMaterialPlugin,
+            PlayerPlugin,
+            BulletPlugin,
+        ))
         .add_systems(Startup, setup)
         .run();
 }

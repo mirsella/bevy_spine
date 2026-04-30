@@ -10,7 +10,7 @@ use bevy::{
     },
 };
 use bevy_spine::{
-    SkeletonController, SkeletonData, SkeletonDataHandle, Spine, SpineDrawer, SpinePlugin,
+    SkeletonController, SkeletonData, SkeletonDataHandle, Spine, SpineCorePlugin, SpineDrawer,
     SpineReadyEvent, SpineSet, SpineSettings,
     materials::{
         DARK_COLOR_ATTRIBUTE, DARK_COLOR_SHADER_POSITION, SpineMaterial, SpineMaterialInfo,
@@ -20,9 +20,9 @@ use bevy_spine::{
 
 fn main() {
     App::new()
+        .add_plugins((DefaultPlugins, SpineCorePlugin))
         .add_plugins((
-            DefaultPlugins,
-            SpinePlugin,
+            bevy_spine::SpineDefaultMaterialPlugin,
             Material2dPlugin::<MyMaterial>::default(),
             SpineMaterialPlugin::<MyMaterial>::default(),
         ))
@@ -80,7 +80,7 @@ fn on_spawn(
 #[derive(Component)]
 pub struct MySpine;
 
-#[derive(Asset, AsBindGroup, TypePath, Clone, Default)]
+#[derive(Asset, AsBindGroup, TypePath, Clone, Default, PartialEq)]
 pub struct MyMaterial {
     #[texture(0)]
     #[sampler(1)]

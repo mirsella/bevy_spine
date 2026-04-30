@@ -3,7 +3,8 @@
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 use bevy_spine::{
-    SkeletonData, SkeletonDataHandle, Spine, SpinePlugin, SpineReadyEvent, SpineSet, SpineSystem,
+    SkeletonData, SkeletonDataHandle, Spine, SpineCorePlugin, SpineDefaultMaterialPlugin,
+    SpineReadyEvent, SpineSet, SpineSystem,
 };
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
@@ -13,7 +14,7 @@ pub enum ExampleSet {
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, SpinePlugin))
+        .add_plugins((DefaultPlugins, SpineCorePlugin, SpineDefaultMaterialPlugin))
         .init_resource::<DemoData>()
         .add_systems(Startup, setup)
         .add_systems(

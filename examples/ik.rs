@@ -1,7 +1,7 @@
 use bevy::{prelude::*, window::PrimaryWindow};
 use bevy_spine::{
-    SkeletonController, SkeletonData, SkeletonDataHandle, Spine, SpineBone, SpinePlugin,
-    SpineReadyEvent, SpineSet, SpineSync, SpineSyncSet,
+    SkeletonController, SkeletonData, SkeletonDataHandle, Spine, SpineBone, SpineCorePlugin,
+    SpineDefaultMaterialPlugin, SpineReadyEvent, SpineSet, SpineSync, SpineSyncSet,
 };
 
 #[derive(Component)]
@@ -9,7 +9,7 @@ pub struct Crosshair;
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, SpinePlugin))
+        .add_plugins((DefaultPlugins, SpineCorePlugin, SpineDefaultMaterialPlugin))
         .add_systems(Startup, setup)
         .add_systems(
             Update,

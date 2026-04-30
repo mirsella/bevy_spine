@@ -37,7 +37,7 @@ pub enum SpineSynchronizerSet<T: SpineSynchronizer> {
 
 /// A plugin for synchronizing [`SpineBone`] components with a rig.
 ///
-/// This plugin is added automatically in [`SpinePlugin`](`crate::SpinePlugin`) for [`SpineSync`]
+/// This plugin is added automatically in [`SpineCorePlugin`](`crate::SpineCorePlugin`) for [`SpineSync`]
 /// and does not need to be added manually. However, custom synchronization steps can be added to
 /// allow for multiple syncs in a single frame.
 ///
@@ -55,7 +55,7 @@ pub enum SpineSynchronizerSet<T: SpineSynchronizer> {
 ///     App::new()
 ///         .add_plugins((
 ///             DefaultPlugins,
-///             SpinePlugin,
+///             SpineCorePlugin,
 ///             MySpineSyncPlugin::default(),
 ///         ))
 ///         .add_systems(Update, (
@@ -232,7 +232,7 @@ pub type SpineSyncSystem = SpineSynchronizerSystem<SpineSync>;
 /// # fn doc() {
 /// fn main() {
 ///     App::new()
-///         .add_plugins((DefaultPlugins, SpinePlugin))
+///         .add_plugins((DefaultPlugins, SpineCorePlugin))
 ///         .add_systems(Update, (
 ///             spawn,
 ///             before_sync.in_set(SpineSyncSet::BeforeSync),

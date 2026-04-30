@@ -1,12 +1,13 @@
 use bevy::{prelude::*, ui_render::UiDebugOptions};
 use bevy_spine::{
-    SkeletonData, SpinePlugin, SpineUiAnimation, SpineUiFit, SpineUiNode, SpineUiSkeleton,
+    SkeletonData, SpineCorePlugin, SpineDefaultMaterialPlugin, SpineUiAnimation, SpineUiFit,
+    SpineUiNode, SpineUiSkeleton,
 };
 
 fn main() {
     App::new()
         .insert_resource(ShowcaseState::default())
-        .add_plugins((DefaultPlugins, SpinePlugin))
+        .add_plugins((DefaultPlugins, SpineCorePlugin, SpineDefaultMaterialPlugin))
         .add_systems(Startup, setup)
         .add_systems(
             Update,

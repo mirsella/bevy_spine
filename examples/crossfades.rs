@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 use bevy_spine::{
-    Crossfades, SkeletonController, SkeletonData, SkeletonDataHandle, Spine, SpinePlugin,
-    SpineReadyEvent, SpineSet, SpineSystem,
+    Crossfades, SkeletonController, SkeletonData, SkeletonDataHandle, Spine, SpineCorePlugin,
+    SpineDefaultMaterialPlugin, SpineReadyEvent, SpineSet, SpineSystem,
 };
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, SpinePlugin))
+        .add_plugins((DefaultPlugins, SpineCorePlugin, SpineDefaultMaterialPlugin))
         .add_systems(Startup, setup)
         .add_systems(
             Update,
