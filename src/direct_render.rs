@@ -4,9 +4,8 @@ use bevy::{
     mesh::{MeshVertexBufferLayout, MeshVertexBufferLayoutRef, VertexBufferLayout},
     prelude::*,
     render::{
-        Render, RenderApp, RenderSystems,
         extract_component::{ExtractComponent, ExtractComponentPlugin},
-        render_asset::{RenderAssets, prepare_assets},
+        render_asset::{prepare_assets, RenderAssets},
         render_phase::{
             AddRenderCommand, DrawFunctions, PhaseItemExtraIndex, RenderCommand,
             RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewSortedRenderPhases,
@@ -16,18 +15,24 @@ use bevy::{
             VertexAttribute, VertexFormat, VertexStepMode,
         },
         renderer::{RenderDevice, RenderQueue},
-        sync_world::{MainEntity, MainEntityHashMap, MainEntityHashSet},
+        sync_world::{MainEntity, MainEntityHashMap},
         view::{ExtractedView, RenderVisibleEntities},
+        Render, RenderApp, RenderSystems,
     },
     sprite_render::{
-        MATERIAL_2D_BIND_GROUP_INDEX, Material2d, Material2dKey, Material2dPipeline,
-        Mesh2dPipelineKey, PreparedMaterial2d, RenderMaterial2dInstances, RenderMesh2dInstances,
-        SetMaterial2dBindGroup, SetMesh2dBindGroup, SetMesh2dViewBindGroup, SrgbTransparent2d,
-        ViewKeyCache,
+        Material2d, Material2dKey, Material2dPipeline, Mesh2dPipelineKey, PreparedMaterial2d,
+        RenderMaterial2dInstances, RenderMesh2dInstances, SetMaterial2dBindGroup,
+        SetMesh2dBindGroup, SetMesh2dViewBindGroup, SrgbTransparent2d, ViewKeyCache,
+        MATERIAL_2D_BIND_GROUP_INDEX,
     },
 };
 
 use crate::materials::{DARK_COLOR_ATTRIBUTE, DARK_COLOR_SHADER_POSITION};
+
+const VERTEX_BUFFER_LABEL: &str = "spine_direct_packed_vertex_buffer";
+const INDEX_BUFFER_LABEL: &str = "spine_direct_packed_index_buffer";
+const VERTEX_SIZE: usize = std::mem::size_of::<SpineDirectVertex>();
+const INDEX_SIZE: usize = std::mem::size_of::<u32>();
 
 /// CPU-side Spine geometry extracted to the render world for direct GPU upload.
 #[derive(Component, Clone, Default)]
@@ -108,14 +113,18 @@ impl Default for SpineDirectMeshLayout {
 }
 
 #[derive(Resource, Default)]
-struct SpineDirectMeshBuffers(MainEntityHashMap<SpineDirectPreparedMesh>);
+struct SpineDirectMeshBuffers {
+    vertex_buffer: Option<Buffer>,
+    index_buffer: Option<Buffer>,
+    vertex_capacity: u64,
+    index_capacity: u64,
+    meshes: MainEntityHashMap<SpineDirectPreparedMesh>,
+    vertex_bytes: Vec<u8>,
+    index_words: Vec<u32>,
+}
 
 struct SpineDirectPreparedMesh {
-    vertex_buffer: Buffer,
-    vertex_capacity: u64,
-    index_buffer: Buffer,
-    index_capacity: u64,
-    index_count: u32,
+    index_range: std::ops::Range<u32>,
 }
 
 /// Core direct-render resources. Material-specific queueing is installed by
@@ -180,105 +189,109 @@ fn prepare_spine_direct_mesh_buffers(
     mut buffers: ResMut<SpineDirectMeshBuffers>,
     meshes: Query<(&MainEntity, &SpineDirectMesh)>,
 ) {
-    let mut seen = MainEntityHashSet::default();
+    buffers.prepare(&render_device, &render_queue, meshes.iter());
+}
 
-    for (main_entity, mesh) in &meshes {
-        seen.insert(*main_entity);
+impl SpineDirectMeshBuffers {
+    fn prepare<'a>(
+        &mut self,
+        render_device: &RenderDevice,
+        render_queue: &RenderQueue,
+        meshes: impl IntoIterator<Item = (&'a MainEntity, &'a SpineDirectMesh)>,
+    ) {
+        self.meshes.clear();
+        self.vertex_bytes.clear();
+        self.index_words.clear();
+
+        for (main_entity, mesh) in meshes {
+            self.pack(*main_entity, mesh);
+        }
+
+        let vertex_size = self.vertex_bytes.len() as u64;
+        let index_size = (self.index_words.len() * INDEX_SIZE) as u64;
+        self.ensure_capacity(render_device, vertex_size, index_size);
+        self.upload(render_queue, vertex_size, index_size);
+    }
+
+    fn pack(&mut self, main_entity: MainEntity, mesh: &SpineDirectMesh) {
         if mesh.vertices.is_empty() || mesh.indices.is_empty() {
-            buffers.0.remove(main_entity);
-            continue;
+            return;
         }
 
-        let vertex_bytes = bytemuck::cast_slice(mesh.vertices.as_slice());
-        let index_bytes = bytemuck::cast_slice(mesh.indices.as_slice());
-        let vertex_size = vertex_bytes.len() as u64;
-        let index_size = aligned_copy_size(index_bytes.len()) as u64;
-
-        let prepared = buffers.0.entry(*main_entity).or_insert_with(|| {
-            SpineDirectPreparedMesh::new(&render_device, vertex_size, index_size)
-        });
-        prepared.ensure_capacity(&render_device, vertex_size, index_size);
-        render_queue.write_buffer(&prepared.vertex_buffer, 0, vertex_bytes);
-        write_aligned_index_buffer(&render_queue, &prepared.index_buffer, index_bytes);
-        prepared.index_count = mesh.indices.len() as u32;
-    }
-
-    buffers
-        .0
-        .retain(|main_entity, _| seen.contains(main_entity));
-}
-
-fn aligned_copy_size(size: usize) -> usize {
-    (size + 3) & !3
-}
-
-fn write_aligned_index_buffer(render_queue: &RenderQueue, buffer: &Buffer, bytes: &[u8]) {
-    let aligned_len = bytes.len() & !3;
-    if aligned_len > 0 {
-        render_queue.write_buffer(buffer, 0, &bytes[..aligned_len]);
-    }
-    if aligned_len != bytes.len() {
-        let mut tail = [0; 4];
-        tail[..bytes.len() - aligned_len].copy_from_slice(&bytes[aligned_len..]);
-        render_queue.write_buffer(buffer, aligned_len as u64, &tail);
-    }
-}
-
-impl SpineDirectPreparedMesh {
-    fn new(render_device: &RenderDevice, vertex_capacity: u64, index_capacity: u64) -> Self {
-        Self {
-            vertex_buffer: create_buffer(
-                render_device,
-                "spine_direct_vertex_buffer",
-                vertex_capacity,
-                BufferUsages::VERTEX,
-            ),
-            vertex_capacity,
-            index_buffer: create_buffer(
-                render_device,
-                "spine_direct_index_buffer",
-                index_capacity,
-                BufferUsages::INDEX,
-            ),
-            index_capacity,
-            index_count: 0,
+        let Some(vertex_base) = u32::try_from(self.vertex_bytes.len() / VERTEX_SIZE).ok() else {
+            error!(entity = ?main_entity, "too many packed Spine vertices; skipping mesh");
+            return;
+        };
+        if vertex_base > u32::MAX - u32::from(u16::MAX) {
+            error!(entity = ?main_entity, "packed Spine vertex base is too high for rewritten u32 indices; skipping mesh");
+            return;
         }
+        let Some(index_start) = u32::try_from(self.index_words.len()).ok() else {
+            error!(entity = ?main_entity, "too many packed Spine indices; skipping mesh");
+            return;
+        };
+        let Some(index_count) = u32::try_from(mesh.indices.len()).ok() else {
+            error!(entity = ?main_entity, "Spine mesh has too many indices; skipping mesh");
+            return;
+        };
+        let Some(index_end) = index_start.checked_add(index_count) else {
+            error!(entity = ?main_entity, "too many packed Spine indices; skipping mesh");
+            return;
+        };
+
+        self.vertex_bytes
+            .extend_from_slice(bytemuck::cast_slice(mesh.vertices.as_slice()));
+        self.index_words.extend(
+            mesh.indices
+                .iter()
+                .map(|index| vertex_base + u32::from(*index)),
+        );
+        self.meshes.insert(
+            main_entity,
+            SpineDirectPreparedMesh {
+                index_range: index_start..index_end,
+            },
+        );
     }
 
     fn ensure_capacity(&mut self, render_device: &RenderDevice, vertex_size: u64, index_size: u64) {
         if vertex_size > self.vertex_capacity {
-            self.vertex_buffer = create_buffer(
-                render_device,
-                "spine_direct_vertex_buffer",
-                vertex_size,
-                BufferUsages::VERTEX,
-            );
+            self.vertex_buffer = Some(render_device.create_buffer(&BufferDescriptor {
+                label: Some(VERTEX_BUFFER_LABEL),
+                size: vertex_size,
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
             self.vertex_capacity = vertex_size;
         }
         if index_size > self.index_capacity {
-            self.index_buffer = create_buffer(
-                render_device,
-                "spine_direct_index_buffer",
-                index_size,
-                BufferUsages::INDEX,
-            );
+            self.index_buffer = Some(render_device.create_buffer(&BufferDescriptor {
+                label: Some(INDEX_BUFFER_LABEL),
+                size: index_size,
+                usage: BufferUsages::INDEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
             self.index_capacity = index_size;
         }
     }
-}
 
-fn create_buffer(
-    render_device: &RenderDevice,
-    label: &'static str,
-    size: u64,
-    usage: BufferUsages,
-) -> Buffer {
-    render_device.create_buffer(&BufferDescriptor {
-        label: Some(label),
-        size: size.max(1),
-        usage: usage | BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+    fn upload(&self, render_queue: &RenderQueue, vertex_size: u64, index_size: u64) {
+        if vertex_size > 0 {
+            let Some(buffer) = &self.vertex_buffer else {
+                error!("missing Spine direct vertex buffer after capacity check; skipping upload");
+                return;
+            };
+            render_queue.write_buffer(buffer, 0, &self.vertex_bytes);
+        }
+
+        if index_size > 0 {
+            let Some(buffer) = &self.index_buffer else {
+                error!("missing Spine direct index buffer after capacity check; skipping upload");
+                return;
+            };
+            render_queue.write_buffer(buffer, 0, bytemuck::cast_slice(self.index_words.as_slice()));
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -383,13 +396,18 @@ impl<P: bevy::render::render_phase::PhaseItem> RenderCommand<P> for DrawSpineDir
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
         let buffers = buffers.into_inner();
-        let Some(mesh) = buffers.0.get(&item.main_entity()) else {
+        let Some(mesh) = buffers.meshes.get(&item.main_entity()) else {
+            return RenderCommandResult::Skip;
+        };
+        let (Some(vertex_buffer), Some(index_buffer)) =
+            (&buffers.vertex_buffer, &buffers.index_buffer)
+        else {
             return RenderCommandResult::Skip;
         };
 
-        pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-        pass.set_index_buffer(mesh.index_buffer.slice(..), 0, IndexFormat::Uint16);
-        pass.draw_indexed(0..mesh.index_count, 0, item.batch_range().clone());
+        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        pass.set_index_buffer(index_buffer.slice(..), 0, IndexFormat::Uint32);
+        pass.draw_indexed(mesh.index_range.clone(), 0, item.batch_range().clone());
 
         RenderCommandResult::Success
     }
