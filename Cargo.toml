@@ -33,6 +33,7 @@ bevy = { version = "0.17", default-features = false, features = [
 ] }
 glam = { version = "0.30", features = ["mint"] }
 thiserror = "2.0.18"
+bytemuck = { version = "1.23", features = ["derive"] }
 
 [dev-dependencies]
 lerp = "0.5"
