@@ -4,8 +4,9 @@ use bevy::{
     mesh::{MeshVertexBufferLayout, MeshVertexBufferLayoutRef, VertexBufferLayout},
     prelude::*,
     render::{
+        Render, RenderApp, RenderSystems,
         extract_component::{ExtractComponent, ExtractComponentPlugin},
-        render_asset::{prepare_assets, RenderAssets},
+        render_asset::{RenderAssets, prepare_assets},
         render_phase::{
             AddRenderCommand, DrawFunctions, PhaseItemExtraIndex, RenderCommand,
             RenderCommandResult, SetItemPipeline, TrackedRenderPass, ViewSortedRenderPhases,
@@ -17,13 +18,12 @@ use bevy::{
         renderer::{RenderDevice, RenderQueue},
         sync_world::{MainEntity, MainEntityHashMap},
         view::{ExtractedView, RenderVisibleEntities},
-        Render, RenderApp, RenderSystems,
     },
     sprite_render::{
-        Material2d, Material2dKey, Material2dPipeline, Mesh2dPipelineKey, PreparedMaterial2d,
-        RenderMaterial2dInstances, RenderMesh2dInstances, SetMaterial2dBindGroup,
-        SetMesh2dBindGroup, SetMesh2dViewBindGroup, SrgbTransparent2d, ViewKeyCache,
-        MATERIAL_2D_BIND_GROUP_INDEX,
+        MATERIAL_2D_BIND_GROUP_INDEX, Material2d, Material2dKey, Material2dPipeline,
+        Mesh2dPipelineKey, PreparedMaterial2d, RenderMaterial2dInstances, RenderMesh2dInstances,
+        SetMaterial2dBindGroup, SetMesh2dBindGroup, SetMesh2dViewBindGroup, SrgbTransparent2d,
+        ViewKeyCache,
     },
 };
 
