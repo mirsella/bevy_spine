@@ -1021,6 +1021,14 @@ impl SpineRenderables {
     }
 }
 
+fn combined_renderable_has_mesh(renderable: &SkeletonCombinedRenderable) -> bool {
+    // rusty_spine's combined drawer may emit an empty leading renderable when
+    // early draw-order slots are hidden. It should not allocate or shift meshes.
+    renderable.attachment_renderer_object.is_some()
+        && !renderable.vertices.is_empty()
+        && !renderable.indices.is_empty()
+}
+
 #[allow(clippy::type_complexity)]
 fn spine_update_meshes(
     mut spine_query: Query<(&mut Spine, Option<&SpineSettings>, &InheritedVisibility)>,
@@ -1097,7 +1105,11 @@ fn spine_update_meshes(
         }
 
         let renderables = match drawer {
-            SpineDrawer::Combined => SpineRenderables::Combined(spine.0.combined_renderables()),
+            SpineDrawer::Combined => {
+                let mut renderables = spine.0.combined_renderables();
+                renderables.retain(combined_renderable_has_mesh);
+                SpineRenderables::Combined(renderables)
+            }
             SpineDrawer::Separated => SpineRenderables::Simple(spine.0.renderables()),
             SpineDrawer::None => continue,
         };
