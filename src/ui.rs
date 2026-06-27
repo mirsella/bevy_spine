@@ -114,6 +114,7 @@ impl SpineUiRenderLayerManager {
 impl Plugin for SpineUiPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SpineUiNode>()
+            .register_type::<SpineUiBounds>()
             .register_type::<SpineUiSkeleton>()
             .register_type::<SpineUiFit>()
             .register_type::<SpineUiAnimation>()
@@ -145,6 +146,7 @@ impl Plugin for SpineUiPlugin {
 #[require(Node, Crossfades, SpineSettings)]
 #[reflect(Component, Default)]
 pub struct SpineUiNode {
+    pub bounds: Option<SpineUiBounds>,
     pub fit: SpineUiFit,
     pub auto_size: Option<Vec2>,
     pub reference_size: Option<Vec2>,
@@ -168,6 +170,7 @@ impl Default for SpineUiSkeleton {
 impl Default for SpineUiNode {
     fn default() -> Self {
         Self {
+            bounds: None,
             fit: SpineUiFit::Contain,
             auto_size: Some(Vec2::new(300.0, 420.0)),
             reference_size: None,
@@ -178,6 +181,13 @@ impl Default for SpineUiNode {
             animation: None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Default, PartialEq)]
+pub struct SpineUiBounds {
+    pub min: Vec2,
+    pub size: Vec2,
 }
 
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
@@ -224,6 +234,7 @@ struct SpineUiAnimationState {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct SpineUiNonAnimationState {
+    bounds: Option<SpineUiBounds>,
     fit: SpineUiFit,
     auto_size: Option<Vec2>,
     reference_size: Option<Vec2>,
@@ -236,6 +247,7 @@ struct SpineUiNonAnimationState {
 impl From<&SpineUiNode> for SpineUiNonAnimationState {
     fn from(node: &SpineUiNode) -> Self {
         Self {
+            bounds: node.bounds,
             fit: node.fit,
             auto_size: node.auto_size,
             reference_size: node.reference_size,
@@ -475,9 +487,12 @@ fn sync_spine_ui_proxies(
         *skeleton.color_mut() = rusty_spine::Color::new_rgba(r, g, b, a);
 
         let data = skeleton.data();
-        let setup_min = Vec2::new(data.x(), data.y());
-        let setup_size = Vec2::new(data.width(), data.height()).max(Vec2::ONE);
-        let setup_center = setup_min + setup_size * 0.5;
+        let bounds = spine_ui.bounds.unwrap_or(SpineUiBounds {
+            min: Vec2::new(data.x(), data.y()),
+            size: Vec2::new(data.width(), data.height()),
+        });
+        let setup_size = bounds.size.max(Vec2::ONE);
+        let setup_center = bounds.min + setup_size * 0.5;
 
         *proxy_visibility = if inherited_visibility.get() {
             Visibility::Visible
