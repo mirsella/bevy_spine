@@ -11,9 +11,11 @@ use std::{
 use bevy::{
     asset::{RenderAssetUsages, load_internal_binary_asset},
     camera::{primitives::Aabb, visibility::RenderLayers},
+    ecs::hierarchy::ChildSpawnerCommands,
     image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::{Indices, MeshVertexAttribute},
     prelude::*,
+    render::batching::NoAutomaticBatching,
     render::render_resource::{PrimitiveTopology, VertexFormat},
     sprite_render::Material2dPlugin,
 };
@@ -31,6 +33,7 @@ use textures::SpineTextureConfig;
 
 use crate::{
     assets::{AtlasLoader, SkeletonJsonLoader},
+    direct_render::SpineDirectMesh,
     materials::{DARK_COLOR_ATTRIBUTE, SHADER_HANDLE, SpineMaterialPlugin},
     rusty_spine::{
         AnimationStateData, BoneHandle, controller::SkeletonControllerSettings, draw::CullDirection,
@@ -39,6 +42,7 @@ use crate::{
 };
 
 pub use crate::{assets::*, crossfades::Crossfades, entity_sync::*, handle::*, rusty_spine::Color};
+pub use direct_render::SpineDirectMaterial2dPlugin;
 
 /// See [`rusty_spine`] docs for more info.
 pub use crate::rusty_spine::controller::SkeletonController;
@@ -123,6 +127,17 @@ impl Plugin for SpinePlugin {
             SpineMaterialPlugin::<SpineAdditivePmaMaterial>::default(),
             SpineMaterialPlugin::<SpineMultiplyPmaMaterial>::default(),
             SpineMaterialPlugin::<SpineScreenPmaMaterial>::default(),
+        ))
+        .add_plugins(direct_render::SpineDirectRenderPlugin)
+        .add_plugins((
+            direct_render::SpineDirectMaterial2dPlugin::<SpineNormalMaterial>::default(),
+            direct_render::SpineDirectMaterial2dPlugin::<SpineAdditiveMaterial>::default(),
+            direct_render::SpineDirectMaterial2dPlugin::<SpineMultiplyMaterial>::default(),
+            direct_render::SpineDirectMaterial2dPlugin::<SpineScreenMaterial>::default(),
+            direct_render::SpineDirectMaterial2dPlugin::<SpineNormalPmaMaterial>::default(),
+            direct_render::SpineDirectMaterial2dPlugin::<SpineAdditivePmaMaterial>::default(),
+            direct_render::SpineDirectMaterial2dPlugin::<SpineMultiplyPmaMaterial>::default(),
+            direct_render::SpineDirectMaterial2dPlugin::<SpineScreenPmaMaterial>::default(),
         ))
         .add_plugins(SpineSyncPlugin::first())
         .register_type::<Crossfades>()
@@ -366,6 +381,14 @@ pub struct SpineSettings {
     /// Defaults to `false` to reduce CPU work for large numbers of off-screen skeletons.
     /// Set this to `true` if off-screen meshes must stay fully up to date.
     pub update_meshes_when_invisible: bool,
+    /// Upload 2D Spine geometry through a direct render path instead of mutating [`Mesh`] assets.
+    ///
+    /// This avoids per-frame mesh asset events and GPU mesh re-extraction for animated skeletons.
+    /// It is only used with [`SpineMeshType::Mesh2D`]; 3D meshes continue through Bevy meshes.
+    /// Built-in Spine materials are registered automatically by [`SpinePlugin`]; custom
+    /// [`Material2d`](bevy::sprite_render::Material2d) materials also need
+    /// [`SpineDirectMaterial2dPlugin<M>`](SpineDirectMaterial2dPlugin).
+    pub direct_2d_rendering: bool,
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -406,6 +429,7 @@ impl Default for SpineSettings {
             mesh_type: SpineMeshType::Mesh2D,
             drawer: SpineDrawer::Combined,
             update_meshes_when_invisible: false,
+            direct_2d_rendering: false,
         }
     }
 }
@@ -546,8 +570,8 @@ fn spine_load(
                             Ok(skeleton_data) => {
                                 *status = SkeletonDataStatus::Loaded(Arc::new(skeleton_data));
                             }
-                            Err(_err) => {
-                                // TODO: print error?
+                            Err(err) => {
+                                warn!("Failed to load Spine binary skeleton data: {err}");
                                 *status = SkeletonDataStatus::Failed;
                                 continue;
                             }
@@ -669,85 +693,91 @@ fn spine_spawn(
                             }
                         });
                     controller.skeleton.set_to_setup_pose();
-                    let mut bones = HashMap::new();
+                    let mesh_count = controller.skeleton.slots().count();
                     let render_layers = render_layers.cloned();
                     let render_owner = render_owner.copied();
-                    if let Ok(mut entity_commands) = commands.get_entity(spine_entity) {
-                        entity_commands
-                            .with_children(|parent| {
-                                // TODO: currently, a mesh is created for each slot, however when we use the
-                                // combined drawer, this many meshes is usually not necessary. instead, we
-                                // may want to dynamically create meshes as needed in the render system
-                                let render_layers_for_children = render_layers.clone();
-                                let mut spine_meshes_commands = parent.spawn((
-                                    Name::new("spine_meshes"),
-                                    SpineMeshes,
-                                    SpineMeshesUpdateState::default(),
-                                    Transform::from_xyz(0., 0., 0.),
-                                    GlobalTransform::default(),
-                                    Visibility::default(),
-                                    InheritedVisibility::default(),
-                                    ViewVisibility::default(),
-                                ));
+                    let with_children = *with_children;
+                    let mut bones = HashMap::new();
+                    let Ok(mut entity_commands) = commands.get_entity(spine_entity) else {
+                        warn!(
+                            entity = ?spine_entity,
+                            "Spine finished loading, but the entity no longer exists; skipping spawn"
+                        );
+                        continue;
+                    };
 
-                                if let Some(render_layers) = &render_layers_for_children {
-                                    spine_meshes_commands.insert(render_layers.clone());
-                                }
-                                if let Some(render_owner) = render_owner {
-                                    spine_meshes_commands.insert(render_owner);
-                                }
+                    entity_commands
+                        .with_children(|parent| {
+                            let render_layers_for_children = render_layers.clone();
+                            let mut spine_meshes_commands = parent.spawn((
+                                Name::new("spine_meshes"),
+                                SpineMeshes,
+                                SpineMeshesUpdateState::default(),
+                                Transform::from_xyz(0., 0., 0.),
+                                GlobalTransform::default(),
+                                Visibility::default(),
+                                InheritedVisibility::default(),
+                                ViewVisibility::default(),
+                            ));
 
-                                spine_meshes_commands.with_children(|parent| {
-                                    let render_layers_for_meshes =
-                                        render_layers_for_children.clone();
-                                    let mut z = 0.;
-                                    for (index, _) in controller.skeleton.slots().enumerate() {
-                                        let mut mesh = Mesh::new(
-                                            PrimitiveTopology::TriangleList,
-                                            RenderAssetUsages::MAIN_WORLD
-                                                | RenderAssetUsages::RENDER_WORLD,
-                                        );
-                                        empty_mesh(&mut mesh);
-                                        let mesh_handle = meshes.add(mesh);
-                                        let mut mesh_commands = parent.spawn((
-                                            Name::new(format!("spine_mesh {index}")),
-                                            SpineMesh {
-                                                spine_entity,
-                                                handle: mesh_handle.clone(),
-                                                state: SpineMeshState::Empty,
-                                            },
-                                            Transform::from_xyz(0., 0., z),
-                                            GlobalTransform::default(),
-                                            Visibility::default(),
-                                            InheritedVisibility::default(),
-                                            ViewVisibility::default(),
-                                        ));
+                            if let Some(render_layers) = &render_layers_for_children {
+                                spine_meshes_commands.insert(render_layers.clone());
+                            }
+                            if let Some(render_owner) = render_owner {
+                                spine_meshes_commands.insert(render_owner);
+                            }
 
-                                        if let Some(render_layers) = &render_layers_for_meshes {
-                                            mesh_commands.insert(render_layers.clone());
-                                        }
-                                        if let Some(render_owner) = render_owner {
-                                            mesh_commands.insert(render_owner);
-                                        }
-
-                                        z += 0.001;
-                                    }
-                                });
-                                if *with_children {
-                                    spawn_bones(
-                                        spine_entity,
-                                        None,
-                                        parent,
-                                        &controller.skeleton,
-                                        controller.skeleton.bone_root().handle(),
-                                        render_layers_for_children.as_ref(),
-                                        render_owner.as_ref(),
-                                        &mut bones,
+                            spine_meshes_commands.with_children(|parent| {
+                                let render_layers_for_meshes = render_layers_for_children.clone();
+                                let mut z = 0.;
+                                for index in 0..mesh_count {
+                                    let mut mesh = Mesh::new(
+                                        PrimitiveTopology::TriangleList,
+                                        RenderAssetUsages::MAIN_WORLD
+                                            | RenderAssetUsages::RENDER_WORLD,
                                     );
+                                    empty_mesh(&mut mesh);
+                                    let mesh_handle = meshes.add(mesh);
+
+                                    let mut mesh_commands = parent.spawn((
+                                        Name::new(format!("spine_mesh {index}")),
+                                        SpineMesh {
+                                            spine_entity,
+                                            handle: mesh_handle,
+                                            state: SpineMeshState::Empty,
+                                        },
+                                        Transform::from_xyz(0., 0., z),
+                                        GlobalTransform::default(),
+                                        Visibility::default(),
+                                        InheritedVisibility::default(),
+                                        ViewVisibility::default(),
+                                    ));
+
+                                    if let Some(render_layers) = &render_layers_for_meshes {
+                                        mesh_commands.insert(render_layers.clone());
+                                    }
+                                    if let Some(render_owner) = render_owner {
+                                        mesh_commands.insert(render_owner);
+                                    }
+
+                                    z += 0.001;
                                 }
-                            })
-                            .insert(Spine(controller));
-                    }
+                            });
+
+                            if with_children {
+                                spawn_bones(
+                                    spine_entity,
+                                    None,
+                                    parent,
+                                    &controller.skeleton,
+                                    controller.skeleton.bone_root().handle(),
+                                    render_layers_for_children.as_ref(),
+                                    render_owner.as_ref(),
+                                    &mut bones,
+                                );
+                            }
+                        })
+                        .insert(Spine(controller));
                     *spine_loader = SpineLoader::Ready;
                     ready_events.0.push(SpineReadyEvent {
                         entity: spine_entity,
@@ -853,7 +883,7 @@ fn spine_update_animation(
     }
 }
 
-pub enum SkeletonRenderableKind {
+enum SkeletonRenderableKind {
     Simple(Vec<SkeletonRenderable>),
     Combined(Vec<SkeletonCombinedRenderable>),
 }
@@ -869,6 +899,7 @@ fn spine_update_meshes(
         Option<&mut Aabb>,
         Option<&Mesh2d>,
         Option<&Mesh3d>,
+        Option<&mut SpineDirectMesh>,
     )>,
     mesh_visibility_query: Query<&ViewVisibility, With<SpineMesh>>,
     mut commands: Commands,
@@ -894,6 +925,10 @@ fn spine_update_meshes(
         let Ok((mut spine, spine_mesh_type, inherited_visibility)) =
             spine_query.get_mut(meshes_parent.parent())
         else {
+            warn!(
+                entity = ?meshes_parent.parent(),
+                "SpineMeshes parent has no ready Spine component; skipping mesh update"
+            );
             continue;
         };
 
@@ -905,8 +940,10 @@ fn spine_update_meshes(
             mesh_type,
             drawer,
             update_meshes_when_invisible,
+            direct_2d_rendering,
             ..
         } = spine_mesh_type.cloned().unwrap_or(SpineSettings::default());
+        let use_direct_2d_rendering = direct_2d_rendering && mesh_type == SpineMeshType::Mesh2D;
 
         if !update_meshes_when_invisible && update_state.initialized {
             let any_visible = meshes_children.iter().any(|child| {
@@ -927,7 +964,14 @@ fn spine_update_meshes(
 
         let mut renderables = match drawer {
             SpineDrawer::Combined => {
-                SkeletonRenderableKind::Combined(spine.0.combined_renderables())
+                let mut renderables = spine.0.combined_renderables();
+                // rusty_spine can emit empty leading combined renderables when early slots are hidden.
+                renderables.retain(|renderable| {
+                    renderable.attachment_renderer_object.is_some()
+                        && !renderable.vertices.is_empty()
+                        && !renderable.indices.is_empty()
+                });
+                SkeletonRenderableKind::Combined(renderables)
             }
             SpineDrawer::Separated => SkeletonRenderableKind::Simple(spine.0.renderables()),
             SpineDrawer::None => continue,
@@ -942,39 +986,61 @@ fn spine_update_meshes(
                 mut spine_mesh_aabb,
                 spine_2d_mesh,
                 spine_3d_mesh,
+                mut direct_mesh,
             )) = mesh_query.get_mut(child)
             {
-                macro_rules! apply_mesh {
-                    ($mesh:ident, $condition:expr, $attach:expr, $deattach:ty) => {
-                        if $condition {
-                            if !$mesh.is_some() {
-                                if let Ok(mut entity) = commands.get_entity(spine_mesh_entity) {
-                                    entity.insert($attach);
-                                }
-                            }
-                        } else {
-                            if $mesh.is_some() {
-                                if let Ok(mut entity) = commands.get_entity(spine_mesh_entity) {
-                                    entity.remove::<$deattach>();
-                                }
-                            }
+                if use_direct_2d_rendering {
+                    let direct_mesh_2d = Mesh2d(Handle::<Mesh>::default());
+                    if spine_2d_mesh != Some(&direct_mesh_2d)
+                        && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
+                    {
+                        entity.insert((direct_mesh_2d, NoAutomaticBatching));
+                    }
+                } else {
+                    let mesh_2d = Mesh2d(spine_mesh.handle.clone());
+                    if mesh_type == SpineMeshType::Mesh2D {
+                        if spine_2d_mesh != Some(&mesh_2d)
+                            && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
+                        {
+                            entity.insert(mesh_2d);
                         }
-                    };
+                    } else if spine_2d_mesh.is_some()
+                        && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
+                    {
+                        entity.remove::<Mesh2d>();
+                    }
+
+                    if direct_mesh.is_some()
+                        && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
+                    {
+                        entity.remove::<(SpineDirectMesh, NoAutomaticBatching)>();
+                    }
                 }
-                apply_mesh!(
-                    spine_2d_mesh,
-                    mesh_type == SpineMeshType::Mesh2D,
-                    Mesh2d(spine_mesh.handle.clone()),
-                    Mesh2d
-                );
-                apply_mesh!(
-                    spine_3d_mesh,
-                    mesh_type == SpineMeshType::Mesh3D,
-                    Mesh3d(spine_mesh.handle.clone()),
-                    Mesh3d
-                );
-                let Some(mut mesh) = meshes.get_mut(&spine_mesh.handle) else {
-                    continue;
+
+                let mesh_3d = Mesh3d(spine_mesh.handle.clone());
+                if mesh_type == SpineMeshType::Mesh3D {
+                    if spine_3d_mesh != Some(&mesh_3d)
+                        && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
+                    {
+                        entity.insert(mesh_3d);
+                    }
+                } else if spine_3d_mesh.is_some()
+                    && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
+                {
+                    entity.remove::<Mesh3d>();
+                }
+
+                let mut mesh = if use_direct_2d_rendering {
+                    None
+                } else {
+                    let Some(mut mesh) = meshes.get_mut(&spine_mesh.handle) else {
+                        warn!(
+                            "Spine mesh asset {:?} is missing; skipping mesh update",
+                            spine_mesh.handle
+                        );
+                        continue;
+                    };
+                    Some(mesh)
                 };
                 let mut empty = true;
                 'render: {
@@ -1065,19 +1131,51 @@ fn spine_update_meshes(
                     let spine_texture =
                         unsafe { &mut *(attachment_render_object as *mut SpineTexture) };
                     let texture_path = spine_texture.0.clone();
-                    let mut normals = vec![];
-                    for _ in 0..vertices.len() {
-                        normals.push([0., 0., 0.]);
+                    let mesh_updated = if use_direct_2d_rendering {
+                        let mut next_direct_mesh = None;
+                        let updated = {
+                            let direct_mesh = if let Some(direct_mesh) = direct_mesh.as_deref_mut()
+                            {
+                                direct_mesh
+                            } else {
+                                next_direct_mesh.insert(SpineDirectMesh::default())
+                            };
+                            direct_mesh.write(
+                                spine_mesh_entity,
+                                &vertices,
+                                &indices,
+                                &uvs,
+                                &colors,
+                                &dark_colors,
+                            )
+                        };
+                        if updated
+                            && let Some(next_direct_mesh) = next_direct_mesh
+                            && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
+                        {
+                            entity.insert(next_direct_mesh);
+                        }
+                        updated
+                    } else if let Some(mesh) = mesh.as_deref_mut() {
+                        let normals = vec![[0., 0., 0.]; vertices.len()];
+                        mesh.insert_indices(Indices::U16(indices));
+                        mesh.insert_attribute(
+                            MeshVertexAttribute::new("Vertex_Position", 0, VertexFormat::Float32x2),
+                            vertices,
+                        );
+                        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+                        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+                        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+                        mesh.insert_attribute(DARK_COLOR_ATTRIBUTE, dark_colors);
+                        true
+                    } else {
+                        false
+                    };
+
+                    if !mesh_updated {
+                        break 'render;
                     }
-                    mesh.insert_indices(Indices::U16(indices));
-                    mesh.insert_attribute(
-                        MeshVertexAttribute::new("Vertex_Position", 0, VertexFormat::Float32x2),
-                        vertices,
-                    );
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-                    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-                    mesh.insert_attribute(DARK_COLOR_ATTRIBUTE, dark_colors);
+
                     spine_mesh.state = SpineMeshState::Renderable {
                         info: SpineMaterialInfo {
                             slot_index,
@@ -1098,7 +1196,13 @@ fn spine_update_meshes(
                 }
                 if empty {
                     spine_mesh.state = SpineMeshState::Empty;
-                    empty_mesh(&mut mesh);
+                    if use_direct_2d_rendering {
+                        if let Some(direct_mesh) = direct_mesh.as_deref_mut() {
+                            direct_mesh.clear();
+                        }
+                    } else if let Some(mesh) = mesh.as_deref_mut() {
+                        empty_mesh(&mut mesh);
+                    }
                     write_spine_mesh_aabb(
                         &mut commands,
                         spine_mesh_entity,
@@ -1223,6 +1327,7 @@ fn adjust_spine_textures(
 
 mod assets;
 mod crossfades;
+mod direct_render;
 mod entity_sync;
 mod handle;
 #[cfg(feature = "ui")]
@@ -1235,8 +1340,9 @@ pub mod textures;
 pub mod prelude {
     pub use crate::{
         Crossfades, SkeletonController, SkeletonData, SkeletonDataHandle, Spine, SpineBone,
-        SpineEvent, SpineLoader, SpineMesh, SpineMeshState, SpinePlugin, SpineReadyEvent, SpineSet,
-        SpineSettings, SpineSync, SpineSyncSet, SpineSyncSystem, SpineSystem,
+        SpineDirectMaterial2dPlugin, SpineEvent, SpineLoader, SpineMesh, SpineMeshState,
+        SpinePlugin, SpineReadyEvent, SpineSet, SpineSettings, SpineSync, SpineSyncSet,
+        SpineSyncSystem, SpineSystem,
     };
     #[cfg(feature = "ui")]
     pub use crate::{SpineUiFit, SpineUiNode, SpineUiProxy, SpineUiReadyEvent, SpineUiSkeleton};

@@ -94,36 +94,26 @@ fn update_materials<T: SpineMaterial>(
             continue;
         };
         if let Some(handle) = material_handle {
-            let mut remove_material = false;
-            let material_to_add = match materials.get_mut(handle.clone()) {
+            let remove_material = match materials.get_mut(handle.clone()) {
                 Some(mut material) => match T::update(
                     Some(material.clone()),
                     spine_mesh.spine_entity,
-                    data.clone(),
+                    data,
                     &params,
                 ) {
                     Some(new_material) => {
                         *material = new_material;
-                        None
+                        false
                     }
-                    None => {
-                        remove_material = true;
-                        None
-                    }
+                    None => true,
                 },
-                None => T::update(None, spine_mesh.spine_entity, data, &params),
+                None => true,
             };
 
             if remove_material {
                 materials.remove(handle.clone());
                 if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
                     entity_commands.remove::<T::MeshMaterial>();
-                }
-            } else if let Some(material) = material_to_add {
-                let handle = materials.add(material);
-                if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
-                    entity_commands
-                        .insert(<T::MeshMaterial as From<Handle<T::Material>>>::from(handle));
                 }
             }
         } else if let Some(material) = T::update(None, spine_mesh.spine_entity, data, &params) {
