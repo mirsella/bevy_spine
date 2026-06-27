@@ -53,7 +53,7 @@ fn on_spawn(
                 animation_state,
                 ..
             }) = spine.as_mut();
-            skeleton.set_scale(Vec2::splat(1.));
+            skeleton.set_scale([1., 1.]);
             let _ = animation_state.set_animation_by_name(0, "run", true);
             let _ = animation_state.set_animation_by_name(1, "aim", true);
             let _ = animation_state.set_animation_by_name(2, "shoot", true);

@@ -93,20 +93,35 @@ fn update_materials<T: SpineMaterial>(
         let SpineMeshState::Renderable { info: data } = spine_mesh.state.clone() else {
             continue;
         };
-        if let Some((material, handle)) =
-            material_handle.and_then(|handle| materials.get_mut(handle.clone()).zip(Some(handle)))
-        {
-            if let Some(new_material) = T::update(
-                Some(material.clone()),
-                spine_mesh.spine_entity,
-                data,
-                &params,
-            ) {
-                *material = new_material;
-            } else {
+        if let Some(handle) = material_handle {
+            let (remove_material, create_material) = match materials.get_mut(handle.clone()) {
+                Some(mut material) => match T::update(
+                    Some(material.clone()),
+                    spine_mesh.spine_entity,
+                    data.clone(),
+                    &params,
+                ) {
+                    Some(new_material) => {
+                        *material = new_material;
+                        (false, false)
+                    }
+                    None => (true, false),
+                },
+                None => (false, true),
+            };
+
+            if remove_material {
                 materials.remove(handle.clone());
                 if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
                     entity_commands.remove::<T::MeshMaterial>();
+                }
+            } else if create_material
+                && let Some(material) = T::update(None, spine_mesh.spine_entity, data, &params)
+            {
+                let handle = materials.add(material);
+                if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
+                    entity_commands
+                        .insert(<T::MeshMaterial as From<Handle<T::Material>>>::from(handle));
                 }
             }
         } else if let Some(material) = T::update(None, spine_mesh.spine_entity, data, &params) {

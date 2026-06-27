@@ -973,7 +973,7 @@ fn spine_update_meshes(
                     Mesh3d(spine_mesh.handle.clone()),
                     Mesh3d
                 );
-                let Some(mesh) = meshes.get_mut(&spine_mesh.handle) else {
+                let Some(mut mesh) = meshes.get_mut(&spine_mesh.handle) else {
                     continue;
                 };
                 let mut empty = true;
@@ -1098,7 +1098,7 @@ fn spine_update_meshes(
                 }
                 if empty {
                     spine_mesh.state = SpineMeshState::Empty;
-                    empty_mesh(mesh);
+                    empty_mesh(&mut mesh);
                     write_spine_mesh_aabb(
                         &mut commands,
                         spine_mesh_entity,
@@ -1157,7 +1157,7 @@ fn adjust_spine_textures(
     }
     let mut removed_handles = vec![];
     for (handle_index, (handle, handle_config)) in local.handles.iter().enumerate() {
-        if let Some(image) = images.get_mut(handle) {
+        if let Some(mut image) = images.get_mut(handle) {
             fn convert_filter(filter: AtlasFilter) -> ImageFilterMode {
                 match filter {
                     AtlasFilter::Nearest => ImageFilterMode::Nearest,
