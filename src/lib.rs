@@ -375,8 +375,8 @@ pub struct SpineSettings {
     /// This avoids per-frame mesh asset events and GPU mesh re-extraction for animated skeletons.
     /// Built-in 2D Spine materials are registered automatically by [`SpinePlugin`]; custom
     /// [`Material2d`](bevy::sprite_render::Material2d) materials also need
-    /// [`SpineDirectMaterial2dPlugin<M>`](SpineDirectMaterial2dPlugin). 3D Spine direct rendering
-    /// uses transparent Bevy PBR materials.
+    /// [`SpineDirectMaterial2dPlugin<M>`](SpineDirectMaterial2dPlugin). 3D Spine rendering
+    /// requires the `3d` cargo feature; direct 3D rendering uses transparent Bevy PBR materials.
     pub direct_rendering: bool,
 }
 
@@ -391,8 +391,10 @@ pub enum SpineMeshType {
     Mesh2D,
     /// Render meshes in 3D.
     ///
-    /// Requires a custom [`SpineMaterial`](`materials::SpineMaterial`) since the default materials
-    /// do not support 3D meshes.
+    /// Requires the `3d` cargo feature and a custom
+    /// [`SpineMaterial`](`materials::SpineMaterial`) since the default materials do not support 3D
+    /// meshes.
+    #[cfg(feature = "3d")]
     Mesh3D,
 }
 
@@ -969,6 +971,7 @@ fn spine_update_meshes(
 
                 let desired_3d_mesh = match mesh_type {
                     SpineMeshType::Mesh2D => None,
+                    #[cfg(feature = "3d")]
                     SpineMeshType::Mesh3D => Some(Mesh3d(spine_mesh.handle.clone())),
                 };
                 let mesh_components_changed = spine_2d_mesh != desired_2d_mesh.as_ref()

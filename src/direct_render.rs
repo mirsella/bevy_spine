@@ -17,6 +17,7 @@ use bevy::{
         view::{ExtractedView, RenderVisibleEntities},
     },
 };
+#[cfg(feature = "3d")]
 use bevy::{
     core_pipeline::core_3d::Transparent3d,
     material::RenderPhaseType,
@@ -165,6 +166,7 @@ impl Plugin for SpineDirectRenderPlugin {
                     prepare_spine_direct_mesh_buffers.in_set(RenderSystems::PrepareResources),
                 );
 
+            #[cfg(feature = "3d")]
             render_app
                 .add_render_command::<Transparent3d, DrawSpineDirectMaterial3d>()
                 .add_systems(
@@ -213,6 +215,7 @@ type DrawSpineDirectMaterial2d<M> = (
     DrawSpineDirectMesh,
 );
 
+#[cfg(feature = "3d")]
 type DrawSpineDirectMaterial3d = (
     SetItemPipeline,
     SetMeshViewBindGroup<0>,
@@ -387,6 +390,7 @@ fn queue_spine_direct_material2d_meshes<M: Material2d>(
     }
 }
 
+#[cfg(feature = "3d")]
 fn queue_spine_direct_material3d_meshes(
     render_materials: Option<Res<ErasedRenderAssets<PreparedMaterial>>>,
     render_material_instances: Option<Res<RenderMaterialInstances>>,

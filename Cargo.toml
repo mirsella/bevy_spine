@@ -12,6 +12,7 @@ exclude = ["assets/*"]
 
 [features]
 default = []
+3d = ["bevy/bevy_pbr"]
 ui = ["bevy/bevy_ui"]
 
 [dependencies]
@@ -21,7 +22,6 @@ bevy = { version = "0.19.0", default-features = false, features = [
   "bevy_log",
   "bevy_render",
   "bevy_asset",
-  "bevy_pbr",
   "bevy_sprite",
   "bevy_sprite_render",
 ] }
@@ -38,6 +38,10 @@ bevy = { version = "0.19.0", default-features = true, features = [
 [workspace]
 resolver = "2"
 members = ["ci"]
+
+[[example]]
+name = "3d"
+required-features = ["3d"]
 
 [[example]]
 name = "ui_showcase"
