@@ -42,7 +42,7 @@ fn on_spawn(
                 animation_state,
                 ..
             }) = spine.as_mut();
-            skeleton.set_scale(Vec2::splat(0.5));
+            skeleton.set_scale([0.5, 0.5]);
             let _ = animation_state.set_animation_by_name(0, "portal", true);
         }
     }

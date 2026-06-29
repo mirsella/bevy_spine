@@ -1,4 +1,4 @@
-use bevy::{prelude::*, ui_render::UiDebugOptions};
+use bevy::{prelude::*, ui_render::GlobalUiDebugOptions};
 use bevy_spine::{
     SkeletonData, SpinePlugin, SpineUiAnimation, SpineUiFit, SpineUiNode, SpineUiSkeleton,
 };
@@ -211,7 +211,7 @@ fn apply_showcase_state(
 
 fn toggle_ui_debug_overlay(
     input: Res<ButtonInput<KeyCode>>,
-    mut debug_options: ResMut<UiDebugOptions>,
+    mut debug_options: ResMut<GlobalUiDebugOptions>,
 ) {
     if input.just_pressed(KeyCode::F1) {
         debug_options.toggle();

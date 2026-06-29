@@ -1,3 +1,8 @@
+# 0.12.0
+- Update to Bevy 0.19.
+- Bump minimum Rust toolchain to 1.95.0.
+- Update examples and material handling for Bevy 0.19 API changes.
+
 # 0.11.0
 - Update to Bevy 0.18.
 - Bump minimum Rust toolchain to 1.89.0.
