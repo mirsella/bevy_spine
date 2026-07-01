@@ -4,11 +4,7 @@ use bevy::{
     render::render_resource::TextureFormat,
     ui::widget::ViewportNode,
 };
-use bevy_spine::{
-    SkeletonData, SkeletonDataHandle, Spine, SpineLoader, SpinePlugin, SpineReadyEvent, SpineSet,
-};
-
-const SPINE_RENDER_LAYER: usize = 1;
+use bevy_spine::{SkeletonData, SkeletonDataHandle, Spine, SpinePlugin, SpineReadyEvent, SpineSet};
 
 fn main() {
     App::new()
@@ -37,7 +33,7 @@ fn setup(
         TextureFormat::Bgra8UnormSrgb,
         None,
     ));
-    let render_layers = RenderLayers::none().with(SPINE_RENDER_LAYER);
+    let render_layers = RenderLayers::none().with(1);
 
     let camera_entity = commands
         .spawn((
@@ -54,8 +50,6 @@ fn setup(
 
     commands.spawn((
         SkeletonDataHandle(skeleton_handle),
-        SpineLoader::without_children(),
-        Transform::default(),
         render_layers,
         // Keep the proxy visible. RenderLayers keep it out of the main window camera.
     ));

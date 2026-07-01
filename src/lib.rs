@@ -734,7 +734,6 @@ fn spine_spawn(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_bones(
     spine_entity: Entity,
     bone_parent: Option<SpineBoneParent>,
