@@ -80,7 +80,7 @@ fn on_spawn(
 #[derive(Component)]
 pub struct MySpine;
 
-#[derive(Asset, AsBindGroup, TypePath, Clone, Default)]
+#[derive(Asset, AsBindGroup, TypePath, Clone, Default, PartialEq)]
 pub struct MyMaterial {
     #[texture(0)]
     #[sampler(1)]
@@ -128,8 +128,6 @@ pub struct MyMaterialParam<'w, 's> {
 }
 
 impl SpineMaterial for MyMaterial {
-    type MeshMaterial = MeshMaterial2d<Self>;
-    type Material = Self;
     type Params<'w, 's> = MyMaterialParam<'w, 's>;
 
     fn update(

@@ -147,7 +147,6 @@ impl Plugin for SpinePlugin {
         .register_type::<SpineMeshState>()
         .register_type::<SpineLoader>()
         .register_type::<SpineSettings>()
-        .register_type::<SpineMeshType>()
         .register_type::<SpineDrawer>()
         .init_resource::<SpineEventQueue>()
         .insert_resource(SpineTextures::init())
@@ -366,8 +365,6 @@ pub struct SpineSettings {
     /// If `false`, a custom [`SpineMaterial`](`materials::SpineMaterial`) should be configured for
     /// this Spine.
     pub default_materials: bool,
-    /// Indicates how the meshes should be drawn.
-    pub mesh_type: SpineMeshType,
     /// The drawer this Spine should use to create its meshes.
     pub drawer: SpineDrawer,
     /// Keep rebuilding meshes even when all mesh children are currently out of view.
@@ -378,22 +375,10 @@ pub struct SpineSettings {
     /// Upload 2D Spine geometry through a direct render path instead of mutating [`Mesh`] assets.
     ///
     /// This avoids per-frame mesh asset events and GPU mesh re-extraction for animated skeletons.
-    /// It is only used with [`SpineMeshType::Mesh2D`]; 3D meshes continue through Bevy meshes.
     /// Built-in Spine materials are registered automatically by [`SpinePlugin`]; custom
     /// [`Material2d`](bevy::sprite_render::Material2d) materials also need
     /// [`SpineDirectMaterial2dPlugin<M>`](SpineDirectMaterial2dPlugin).
     pub direct_2d_rendering: bool,
-}
-
-/// Mesh types to use in [`SpineSettings`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Reflect)]
-#[reflect(Debug, PartialEq, Clone)]
-pub enum SpineMeshType {
-    /// Render meshes in 2D.
-    Mesh2D,
-    /// Render meshes in 3D. Requires a custom [`SpineMaterial`](`materials::SpineMaterial`) since
-    /// the default materials do not support 3D meshes.
-    Mesh3D,
 }
 
 /// Drawer methods to use in [`SpineSettings`].
@@ -417,7 +402,6 @@ impl Default for SpineSettings {
     fn default() -> Self {
         Self {
             default_materials: true,
-            mesh_type: SpineMeshType::Mesh2D,
             drawer: SpineDrawer::Combined,
             update_meshes_when_invisible: false,
             direct_2d_rendering: false,
@@ -871,7 +855,6 @@ fn spine_update_meshes(
         &mut Transform,
         Option<&mut Aabb>,
         Option<&Mesh2d>,
-        Option<&Mesh3d>,
         Option<&mut SpineDirectMesh>,
     )>,
     mesh_visibility_query: Query<&ViewVisibility, With<SpineMesh>>,
@@ -895,7 +878,7 @@ fn spine_update_meshes(
     }
 
     for (meshes_parent, meshes_children, mut update_state) in meshes_query.iter_mut() {
-        let Ok((mut spine, spine_mesh_type, inherited_visibility)) =
+        let Ok((mut spine, spine_settings, inherited_visibility)) =
             spine_query.get_mut(meshes_parent.parent())
         else {
             warn!(
@@ -910,13 +893,11 @@ fn spine_update_meshes(
         }
 
         let SpineSettings {
-            mesh_type,
             drawer,
             update_meshes_when_invisible,
             direct_2d_rendering,
             ..
-        } = spine_mesh_type.copied().unwrap_or_default();
-        let use_direct_2d_rendering = direct_2d_rendering && mesh_type == SpineMeshType::Mesh2D;
+        } = spine_settings.copied().unwrap_or_default();
 
         if !update_meshes_when_invisible && update_state.initialized {
             let any_visible = meshes_children.iter().any(|child| {
@@ -958,11 +939,10 @@ fn spine_update_meshes(
                 mut spine_mesh_transform,
                 mut spine_mesh_aabb,
                 spine_2d_mesh,
-                spine_3d_mesh,
                 mut direct_mesh,
             )) = mesh_query.get_mut(child)
             {
-                if use_direct_2d_rendering {
+                if direct_2d_rendering {
                     let direct_mesh_2d = Mesh2d(Handle::<Mesh>::default());
                     if spine_2d_mesh != Some(&direct_mesh_2d)
                         && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
@@ -971,16 +951,10 @@ fn spine_update_meshes(
                     }
                 } else {
                     let mesh_2d = Mesh2d(spine_mesh.handle.clone());
-                    if mesh_type == SpineMeshType::Mesh2D {
-                        if spine_2d_mesh != Some(&mesh_2d)
-                            && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
-                        {
-                            entity.insert(mesh_2d);
-                        }
-                    } else if spine_2d_mesh.is_some()
+                    if spine_2d_mesh != Some(&mesh_2d)
                         && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
                     {
-                        entity.remove::<Mesh2d>();
+                        entity.insert(mesh_2d);
                     }
 
                     if direct_mesh.is_some()
@@ -989,20 +963,8 @@ fn spine_update_meshes(
                         entity.remove::<(SpineDirectMesh, NoAutomaticBatching)>();
                     }
                 }
-                let mesh_3d = Mesh3d(spine_mesh.handle.clone());
-                if mesh_type == SpineMeshType::Mesh3D {
-                    if spine_3d_mesh != Some(&mesh_3d)
-                        && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
-                    {
-                        entity.insert(mesh_3d);
-                    }
-                } else if spine_3d_mesh.is_some()
-                    && let Ok(mut entity) = commands.get_entity(spine_mesh_entity)
-                {
-                    entity.remove::<Mesh3d>();
-                }
 
-                let mut mesh = if use_direct_2d_rendering {
+                let mut mesh = if direct_2d_rendering {
                     None
                 } else {
                     let Some(mesh) = meshes.get_mut(&spine_mesh.handle) else {
@@ -1103,7 +1065,7 @@ fn spine_update_meshes(
                     let spine_texture =
                         unsafe { &mut *(attachment_render_object as *mut SpineTexture) };
                     let texture_path = spine_texture.0.clone();
-                    let mesh_updated = if use_direct_2d_rendering {
+                    let mesh_updated = if direct_2d_rendering {
                         let mut next_direct_mesh = None;
                         let updated = {
                             let direct_mesh = if let Some(direct_mesh) = direct_mesh.as_deref_mut()
@@ -1168,7 +1130,7 @@ fn spine_update_meshes(
                 }
                 if empty {
                     spine_mesh.state = SpineMeshState::Empty;
-                    if use_direct_2d_rendering {
+                    if direct_2d_rendering {
                         if let Some(direct_mesh) = direct_mesh.as_deref_mut() {
                             direct_mesh.clear();
                         }

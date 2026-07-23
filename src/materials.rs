@@ -26,27 +26,21 @@ use crate::{SpineMesh, SpineMeshState, SpineSettings, SpineSystem};
 /// materials but can also be used to create custom materials.
 ///
 /// Implement the trait and add it with [`SpineMaterialPlugin`].
-pub trait SpineMaterial: Sized {
-    type MeshMaterial: Component
-        + Clone
-        + Into<AssetId<Self::Material>>
-        + From<Handle<Self::Material>>;
-    /// The material type to apply to [`SpineMesh`]. Usually is `Self`.
-    type Material: Asset + Clone;
+pub trait SpineMaterial: Material2d + PartialEq {
     /// System parameters to query when updating this material.
     type Params<'w, 's>: SystemParam;
 
-    /// Ran every frame for every material and every [`SpineMesh`].
+    /// Runs every frame for every material and every [`SpineMesh`].
     ///
     /// If this function returns [`Some`], then the material will be applied to the [`SpineMesh`],
     /// otherwise it will be removed. Default materials should be removed if a custom material is
     /// desired (see [`SpineSettings::default_materials`]).
     fn update(
-        material: Option<Self::Material>,
+        material: Option<Self>,
         entity: Entity,
         renderable_data: SpineMaterialInfo,
         params: &StaticSystemParam<Self::Params<'_, '_>>,
-    ) -> Option<Self::Material>;
+    ) -> Option<Self>;
 }
 
 /// Add support for a new [`SpineMaterial`].
@@ -82,11 +76,10 @@ pub struct SpineMaterialInfo {
     pub premultiplied_alpha: bool,
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update_materials<T: SpineMaterial>(
     mut commands: Commands,
-    mut materials: ResMut<Assets<T::Material>>,
-    mesh_query: Query<(Entity, &SpineMesh, Option<&T::MeshMaterial>)>,
+    mut materials: ResMut<Assets<T>>,
+    mesh_query: Query<(Entity, &SpineMesh, Option<&MeshMaterial2d<T>>)>,
     params: StaticSystemParam<T::Params<'_, '_>>,
 ) {
     for (mesh_entity, spine_mesh, material_handle) in mesh_query.iter() {
@@ -94,33 +87,38 @@ fn update_materials<T: SpineMaterial>(
             continue;
         };
         if let Some(handle) = material_handle {
-            let remove_material = match materials.get_mut(handle.clone()) {
-                Some(mut material) => match T::update(
-                    Some(material.clone()),
-                    spine_mesh.spine_entity,
-                    data,
-                    &params,
-                ) {
-                    Some(new_material) => {
-                        *material = new_material;
-                        false
-                    }
-                    None => true,
-                },
-                None => true,
+            let id = handle.0.id();
+            let Some(material) = materials.get(id) else {
+                error!(?mesh_entity, "Spine material asset is missing");
+                if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
+                    entity_commands.remove::<MeshMaterial2d<T>>();
+                }
+                continue;
             };
 
-            if remove_material {
-                materials.remove(handle.clone());
-                if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
-                    entity_commands.remove::<T::MeshMaterial>();
+            match T::update(
+                Some(material.clone()),
+                spine_mesh.spine_entity,
+                data,
+                &params,
+            ) {
+                Some(updated) if material != &updated => {
+                    if let Err(error) = materials.insert(id, updated) {
+                        error!(?mesh_entity, %error, "Failed to update Spine material");
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    materials.remove(id);
+                    if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
+                        entity_commands.remove::<MeshMaterial2d<T>>();
+                    }
                 }
             }
         } else if let Some(material) = T::update(None, spine_mesh.spine_entity, data, &params) {
             let handle = materials.add(material);
             if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
-                entity_commands
-                    .insert(<T::MeshMaterial as From<Handle<T::Material>>>::from(handle));
+                entity_commands.insert(MeshMaterial2d(handle));
             }
         };
     }
@@ -146,7 +144,7 @@ pub struct SpineSettingsQuery<'w, 's> {
 macro_rules! material {
     ($(#[$($attrss:tt)*])* $name:ident, $blend_mode:expr, $premultiplied_alpha:expr, $blend_state:expr) => {
         $(#[$($attrss)*])*
-        #[derive(Asset, Default, AsBindGroup, TypePath, Clone)]
+        #[derive(Asset, Default, AsBindGroup, TypePath, Clone, PartialEq)]
         pub struct $name {
             #[texture(0)]
             #[sampler(1)]
@@ -197,8 +195,6 @@ macro_rules! material {
         }
 
         impl SpineMaterial for $name {
-            type MeshMaterial = MeshMaterial2d<Self>;
-            type Material = Self;
             type Params<'w, 's> = SpineSettingsQuery<'w, 's>;
 
             fn update(
