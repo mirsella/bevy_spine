@@ -4,9 +4,8 @@ use bevy::{
     mesh::{MeshVertexBufferLayout, MeshVertexBufferLayoutRef, VertexBufferLayout},
     prelude::*,
     render::{
-        Render, RenderApp, RenderSystems,
+        Extract, ExtractSchedule, Render, RenderApp, RenderSystems,
         camera::ExtractedCamera,
-        extract_component::{ExtractComponent, ExtractComponentPlugin},
         render_asset::{RenderAssets, prepare_assets},
         render_phase::{
             AddRenderCommand, DrawFunctions, PhaseItemExtraIndex, RenderCommand,
@@ -17,8 +16,8 @@ use bevy::{
             SpecializedMeshPipelines, TextureFormat, VertexAttribute, VertexFormat, VertexStepMode,
         },
         renderer::{RenderDevice, RenderQueue},
-        sync_component::SyncComponent,
-        sync_world::{MainEntity, MainEntityHashMap},
+        sync_component::{SyncComponent, SyncComponentPlugin},
+        sync_world::{MainEntity, MainEntityHashMap, RenderEntity},
         view::{ExtractedView, RenderVisibleEntities},
     },
 };
@@ -113,15 +112,24 @@ impl SyncComponent for SpineDirectMesh {
     type Target = Self;
 }
 
-impl ExtractComponent for SpineDirectMesh {
-    type QueryData = &'static Self;
-    type QueryFilter = ();
-    type Out = Self;
+type ChangedVisibleSpineDirectMesh = Or<(Changed<SpineDirectMesh>, Changed<ViewVisibility>)>;
 
-    fn extract_component(
-        item: bevy::ecs::query::QueryItem<'_, '_, Self::QueryData>,
-    ) -> Option<Self::Out> {
-        Some(item.clone())
+fn extract_spine_direct_meshes(
+    mut commands: Commands,
+    meshes: Extract<
+        Query<(RenderEntity, &ViewVisibility, &SpineDirectMesh), ChangedVisibleSpineDirectMesh>,
+    >,
+    mut extracted_meshes: Query<&mut SpineDirectMesh>,
+) {
+    for (render_entity, visibility, source) in &meshes {
+        if !visibility.get() {
+            continue;
+        }
+        if let Ok(mut target) = extracted_meshes.get_mut(render_entity) {
+            target.clone_from(source);
+        } else {
+            commands.entity(render_entity).insert(source.clone());
+        }
     }
 }
 
@@ -201,12 +209,13 @@ pub(crate) struct SpineDirectRenderPlugin;
 
 impl Plugin for SpineDirectRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ExtractComponentPlugin::<SpineDirectMesh>::extract_visible());
+        app.add_plugins(SyncComponentPlugin::<SpineDirectMesh>::default());
 
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
                 .init_resource::<SpineDirectMeshLayout>()
                 .init_resource::<SpineDirectMeshBuffers>()
+                .add_systems(ExtractSchedule, extract_spine_direct_meshes)
                 .add_systems(
                     Render,
                     prepare_spine_direct_mesh_buffers.in_set(RenderSystems::PrepareResources),
@@ -315,22 +324,24 @@ impl SpineDirectMeshBuffers {
 
     fn ensure_capacity(&mut self, render_device: &RenderDevice, vertex_size: u64, index_size: u64) {
         if vertex_size > self.vertex_capacity {
+            self.vertex_capacity = vertex_size
+                .checked_next_power_of_two()
+                .unwrap_or(vertex_size);
             self.vertex_buffer = Some(render_device.create_buffer(&BufferDescriptor {
                 label: Some(VERTEX_BUFFER_LABEL),
-                size: vertex_size,
+                size: self.vertex_capacity,
                 usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
-            self.vertex_capacity = vertex_size;
         }
         if index_size > self.index_capacity {
+            self.index_capacity = index_size.checked_next_power_of_two().unwrap_or(index_size);
             self.index_buffer = Some(render_device.create_buffer(&BufferDescriptor {
                 label: Some(INDEX_BUFFER_LABEL),
-                size: index_size,
+                size: self.index_capacity,
                 usage: BufferUsages::INDEX | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
-            self.index_capacity = index_size;
         }
     }
 
