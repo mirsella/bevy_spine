@@ -146,8 +146,14 @@ pub enum SkeletonDataKind {
 #[derive(Debug, Clone, Reflect)]
 #[reflect(opaque)]
 pub enum SkeletonDataStatus {
+    /// The skeleton data and every resolved atlas page image are ready to render.
+    ///
+    /// The Spine plugin does not enter this state until all page images have loaded and any
+    /// required premultiplied-alpha correction has succeeded.
     Loaded(Arc<rusty_spine::SkeletonData>),
+    /// The skeleton source, atlas, or one or more atlas page images are still loading.
     Loading,
+    /// The skeleton source, atlas, page image, or page preparation failed.
     Failed,
 }
 

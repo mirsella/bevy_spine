@@ -3,16 +3,24 @@
 //! Add [`SpinePlugin`] to your Bevy app and spawn a [`SkeletonDataHandle`] to get started!
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     mem::take,
     sync::{Arc, Mutex},
 };
 
+use crate::{
+    assets::{AtlasLoader, SkeletonJsonLoader},
+    direct_render::SpineDirectMesh,
+    materials::{DARK_COLOR_ATTRIBUTE, SHADER_HANDLE, SpineMaterialPlugin},
+    rusty_spine::{
+        AnimationStateData, BoneHandle, controller::SkeletonControllerSettings, draw::CullDirection,
+    },
+    textures::{SpineAtlasStatus, SpineTexture, SpineTextures},
+};
 use bevy::{
-    asset::{RenderAssetUsages, load_internal_binary_asset},
+    asset::{AssetPath, RenderAssetUsages, load_internal_binary_asset},
     camera::{primitives::Aabb, visibility::RenderLayers},
     ecs::hierarchy::ChildSpawnerCommands,
-    image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::{Indices, MeshVertexAttribute},
     prelude::*,
     render::batching::NoAutomaticBatching,
@@ -26,23 +34,12 @@ use materials::{
 };
 use rusty_spine::{
     AnimationEvent, Physics, Skeleton,
-    atlas::{AtlasFilter, AtlasWrap},
     controller::{SkeletonCombinedRenderable, SkeletonRenderable},
-};
-use textures::SpineTextureConfig;
-
-use crate::{
-    assets::{AtlasLoader, SkeletonJsonLoader},
-    direct_render::SpineDirectMesh,
-    materials::{DARK_COLOR_ATTRIBUTE, SHADER_HANDLE, SpineMaterialPlugin},
-    rusty_spine::{
-        AnimationStateData, BoneHandle, controller::SkeletonControllerSettings, draw::CullDirection,
-    },
-    textures::{SpineTexture, SpineTextureCreateEvent, SpineTextureDisposeEvent, SpineTextures},
 };
 
 pub use crate::{assets::*, crossfades::Crossfades, entity_sync::*, handle::*, rusty_spine::Color};
 pub use direct_render::SpineDirectMaterial2dPlugin;
+pub use textures::{SpineAssetLoadFailedEvent, SpineTexturePathResolver};
 
 /// See [`rusty_spine`] docs for more info.
 pub use crate::rusty_spine::controller::SkeletonController;
@@ -53,7 +50,8 @@ pub use rusty_spine;
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy, SystemSet)]
 pub enum SpineSystem {
     /// Loads [`SkeletonData`] assets which must exist before a [`SkeletonDataHandle`] can fully
-    /// load.
+    /// load. A skeleton reaches [`SkeletonDataStatus::Loaded`] only after all atlas page images
+    /// are ready.
     Load,
     /// Spawns helper entities associated with entities containing [`SkeletonDataHandle`] for
     /// drawing meshes and (optionally) adding bone entities (see [`SpineLoader`]).
@@ -88,7 +86,7 @@ pub enum SpineSet {
     OnUpdateMesh,
 }
 
-/// Add Spine support to Bevy!
+/// Add Spine support to Bevy.
 ///
 /// ```
 /// # use bevy::prelude::*;
@@ -96,106 +94,130 @@ pub enum SpineSet {
 /// # fn doc() {
 /// App::new()
 ///     .add_plugins(DefaultPlugins)
-///     .add_plugins(SpinePlugin)
+///     .add_plugins(SpinePlugin::default())
 ///     // ...
 ///     .run();
 /// # }
 /// ```
-pub struct SpinePlugin;
+#[derive(Debug, Clone, Copy)]
+pub struct SpinePlugin {
+    built_in_materials: bool,
+}
+
+impl SpinePlugin {
+    /// Avoids registering the built-in material pipelines when an application supplies every
+    /// Spine material itself.
+    pub fn without_built_in_materials() -> Self {
+        Self {
+            built_in_materials: false,
+        }
+    }
+}
+
+impl Default for SpinePlugin {
+    fn default() -> Self {
+        Self {
+            built_in_materials: true,
+        }
+    }
+}
 
 impl Plugin for SpinePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            Material2dPlugin::<SpineNormalMaterial>::default(),
-            Material2dPlugin::<SpineAdditiveMaterial>::default(),
-            Material2dPlugin::<SpineMultiplyMaterial>::default(),
-            Material2dPlugin::<SpineScreenMaterial>::default(),
-            Material2dPlugin::<SpineNormalPmaMaterial>::default(),
-            Material2dPlugin::<SpineAdditivePmaMaterial>::default(),
-            Material2dPlugin::<SpineMultiplyPmaMaterial>::default(),
-            Material2dPlugin::<SpineScreenPmaMaterial>::default(),
-        ))
-        .add_plugins((
-            SpineMaterialPlugin::<SpineNormalMaterial>::default(),
-            SpineMaterialPlugin::<SpineAdditiveMaterial>::default(),
-            SpineMaterialPlugin::<SpineMultiplyMaterial>::default(),
-            SpineMaterialPlugin::<SpineScreenMaterial>::default(),
-            SpineMaterialPlugin::<SpineNormalPmaMaterial>::default(),
-            SpineMaterialPlugin::<SpineAdditivePmaMaterial>::default(),
-            SpineMaterialPlugin::<SpineMultiplyPmaMaterial>::default(),
-            SpineMaterialPlugin::<SpineScreenPmaMaterial>::default(),
-        ))
-        .add_plugins(direct_render::SpineDirectRenderPlugin)
-        .add_plugins((
-            direct_render::SpineDirectMaterial2dPlugin::<SpineNormalMaterial>::default(),
-            direct_render::SpineDirectMaterial2dPlugin::<SpineAdditiveMaterial>::default(),
-            direct_render::SpineDirectMaterial2dPlugin::<SpineMultiplyMaterial>::default(),
-            direct_render::SpineDirectMaterial2dPlugin::<SpineScreenMaterial>::default(),
-            direct_render::SpineDirectMaterial2dPlugin::<SpineNormalPmaMaterial>::default(),
-            direct_render::SpineDirectMaterial2dPlugin::<SpineAdditivePmaMaterial>::default(),
-            direct_render::SpineDirectMaterial2dPlugin::<SpineMultiplyPmaMaterial>::default(),
-            direct_render::SpineDirectMaterial2dPlugin::<SpineScreenPmaMaterial>::default(),
-        ))
-        .add_plugins(SpineSyncPlugin::first())
-        .register_type::<Crossfades>()
-        .register_type::<SkeletonDataHandle>()
-        .register_type::<SpineSync>()
-        .register_type::<Spine>()
-        .register_type::<SpineBone>()
-        .register_type::<SpineMeshes>()
-        .register_type::<SpineMesh>()
-        .register_type::<SpineMeshState>()
-        .register_type::<SpineLoader>()
-        .register_type::<SpineSettings>()
-        .register_type::<SpineDrawer>()
-        .init_resource::<SpineEventQueue>()
-        .insert_resource(SpineTextures::init())
-        .insert_resource(SpineReadyEvents::default())
-        .add_message::<SpineTextureCreateEvent>()
-        .add_message::<SpineTextureDisposeEvent>()
-        .init_asset::<Atlas>()
-        .init_asset::<SkeletonJson>()
-        .init_asset::<SkeletonBinary>()
-        .init_asset::<SkeletonData>()
-        .register_asset_reflect::<Atlas>()
-        .register_asset_reflect::<SkeletonJson>()
-        .register_asset_reflect::<SkeletonBinary>()
-        .register_asset_reflect::<SkeletonData>()
-        .init_asset_loader::<AtlasLoader>()
-        .init_asset_loader::<SkeletonJsonLoader>()
-        .init_asset_loader::<SkeletonBinaryLoader>()
-        .add_message::<SpineReadyEvent>()
-        .add_message::<SpineEvent>()
-        .add_systems(
-            Update,
-            (
-                spine_load.in_set(SpineSystem::Load),
-                spine_spawn
-                    .in_set(SpineSystem::Spawn)
-                    .after(SpineSystem::Load),
-                spine_ready
-                    .in_set(SpineSystem::Ready)
-                    .after(SpineSystem::Spawn)
-                    .before(SpineSet::OnReady),
-                spine_update_animation
-                    .in_set(SpineSystem::UpdateAnimation)
-                    .after(SpineSet::OnReady)
-                    .before(SpineSet::OnEvent),
-                spine_update_meshes
-                    .in_set(SpineSystem::UpdateMeshes)
-                    .in_set(SpineSet::OnUpdateMesh)
-                    .after(SpineSystem::UpdateAnimation)
-                    .after(SpineSet::OnEvent),
-                ApplyDeferred
-                    .in_set(SpineSystem::SpawnFlush)
-                    .after(SpineSystem::Spawn)
-                    .before(SpineSystem::Ready),
-            ),
-        )
-        .add_systems(
-            PostUpdate,
-            adjust_spine_textures.in_set(SpineSystem::AdjustSpineTextures),
-        );
+        if self.built_in_materials {
+            app.add_plugins((
+                Material2dPlugin::<SpineNormalMaterial>::default(),
+                Material2dPlugin::<SpineAdditiveMaterial>::default(),
+                Material2dPlugin::<SpineMultiplyMaterial>::default(),
+                Material2dPlugin::<SpineScreenMaterial>::default(),
+                Material2dPlugin::<SpineNormalPmaMaterial>::default(),
+                Material2dPlugin::<SpineAdditivePmaMaterial>::default(),
+                Material2dPlugin::<SpineMultiplyPmaMaterial>::default(),
+                Material2dPlugin::<SpineScreenPmaMaterial>::default(),
+            ))
+            .add_plugins((
+                SpineMaterialPlugin::<SpineNormalMaterial>::default(),
+                SpineMaterialPlugin::<SpineAdditiveMaterial>::default(),
+                SpineMaterialPlugin::<SpineMultiplyMaterial>::default(),
+                SpineMaterialPlugin::<SpineScreenMaterial>::default(),
+                SpineMaterialPlugin::<SpineNormalPmaMaterial>::default(),
+                SpineMaterialPlugin::<SpineAdditivePmaMaterial>::default(),
+                SpineMaterialPlugin::<SpineMultiplyPmaMaterial>::default(),
+                SpineMaterialPlugin::<SpineScreenPmaMaterial>::default(),
+            ))
+            .add_plugins((
+                direct_render::SpineDirectMaterial2dPlugin::<SpineNormalMaterial>::default(),
+                direct_render::SpineDirectMaterial2dPlugin::<SpineAdditiveMaterial>::default(),
+                direct_render::SpineDirectMaterial2dPlugin::<SpineMultiplyMaterial>::default(),
+                direct_render::SpineDirectMaterial2dPlugin::<SpineScreenMaterial>::default(),
+                direct_render::SpineDirectMaterial2dPlugin::<SpineNormalPmaMaterial>::default(),
+                direct_render::SpineDirectMaterial2dPlugin::<SpineAdditivePmaMaterial>::default(),
+                direct_render::SpineDirectMaterial2dPlugin::<SpineMultiplyPmaMaterial>::default(),
+                direct_render::SpineDirectMaterial2dPlugin::<SpineScreenPmaMaterial>::default(),
+            ));
+        }
+
+        app.add_plugins(direct_render::SpineDirectRenderPlugin)
+            .add_plugins(SpineSyncPlugin::first())
+            .register_type::<Crossfades>()
+            .register_type::<SkeletonDataHandle>()
+            .register_type::<SpineSync>()
+            .register_type::<Spine>()
+            .register_type::<SpineBone>()
+            .register_type::<SpineMeshes>()
+            .register_type::<SpineMesh>()
+            .register_type::<SpineMeshState>()
+            .register_type::<SpineLoader>()
+            .register_type::<SpineSettings>()
+            .register_type::<SpineDrawer>()
+            .init_resource::<SpineEventQueue>()
+            .init_resource::<SpineTexturePathResolver>()
+            .insert_resource(SpineTextures::init())
+            .insert_resource(SpineReadyEvents::default())
+            .add_message::<SpineAssetLoadFailedEvent>()
+            .init_asset::<Atlas>()
+            .init_asset::<SkeletonJson>()
+            .init_asset::<SkeletonBinary>()
+            .init_asset::<SkeletonData>()
+            .register_asset_reflect::<Atlas>()
+            .register_asset_reflect::<SkeletonJson>()
+            .register_asset_reflect::<SkeletonBinary>()
+            .register_asset_reflect::<SkeletonData>()
+            .init_asset_loader::<AtlasLoader>()
+            .init_asset_loader::<SkeletonJsonLoader>()
+            .init_asset_loader::<SkeletonBinaryLoader>()
+            .add_message::<SpineReadyEvent>()
+            .add_message::<SpineEvent>()
+            .add_systems(
+                Update,
+                (
+                    spine_load.in_set(SpineSystem::Load),
+                    spine_spawn
+                        .in_set(SpineSystem::Spawn)
+                        .after(SpineSystem::Load),
+                    spine_ready
+                        .in_set(SpineSystem::Ready)
+                        .after(SpineSystem::Spawn)
+                        .before(SpineSet::OnReady),
+                    spine_update_animation
+                        .in_set(SpineSystem::UpdateAnimation)
+                        .after(SpineSet::OnReady)
+                        .before(SpineSet::OnEvent),
+                    spine_update_meshes
+                        .in_set(SpineSystem::UpdateMeshes)
+                        .in_set(SpineSet::OnUpdateMesh)
+                        .after(SpineSystem::UpdateAnimation)
+                        .after(SpineSet::OnEvent),
+                    ApplyDeferred
+                        .in_set(SpineSystem::SpawnFlush)
+                        .after(SpineSystem::Spawn)
+                        .before(SpineSystem::Ready),
+                ),
+            )
+            .add_systems(
+                PostUpdate,
+                textures::adjust_spine_textures.in_set(SpineSystem::AdjustSpineTextures),
+            );
 
         load_internal_binary_asset!(
             app,
@@ -483,86 +505,262 @@ struct SpineReadyEvents(Vec<SpineReadyEvent>);
 #[allow(clippy::too_many_arguments)]
 fn spine_load(
     mut skeleton_data_assets: ResMut<Assets<SkeletonData>>,
-    mut texture_create_events: MessageWriter<SpineTextureCreateEvent>,
-    mut texture_dispose_events: MessageWriter<SpineTextureDisposeEvent>,
+    mut skeleton_data_events: MessageReader<AssetEvent<SkeletonData>>,
+    mut atlas_events: MessageReader<AssetEvent<Atlas>>,
+    mut json_events: MessageReader<AssetEvent<SkeletonJson>>,
+    mut binary_events: MessageReader<AssetEvent<SkeletonBinary>>,
+    mut image_events: MessageReader<AssetEvent<Image>>,
+    mut terminal_failures: MessageReader<SpineAssetLoadFailedEvent>,
     mut atlases: ResMut<Assets<Atlas>>,
+    mut images: ResMut<Assets<Image>>,
     jsons: Res<Assets<SkeletonJson>>,
     binaries: Res<Assets<SkeletonBinary>>,
-    spine_textures: Res<SpineTextures>,
+    mut spine_textures: ResMut<SpineTextures>,
     asset_server: Res<AssetServer>,
+    path_resolver: Res<SpineTexturePathResolver>,
+    mut previous_texture_revision: Local<Option<u64>>,
 ) {
-    // check if any assets are loading, else, early out to avoid triggering change detection
-    let mut loading = false;
-    for (_, skeleton_data_asset) in skeleton_data_assets.iter() {
-        if matches!(skeleton_data_asset.status, SkeletonDataStatus::Loading) {
-            loading = true;
-            break;
+    let skeleton_data_changed = skeleton_data_events.read().next().is_some();
+    let json_changed = json_events.read().next().is_some();
+    let binary_changed = binary_events.read().next().is_some();
+    let image_changed = image_events.read().next().is_some();
+    let mut changed_atlases = HashSet::new();
+    let mut removed_atlases = HashSet::new();
+    for event in atlas_events.read() {
+        match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => {
+                changed_atlases.insert(*id);
+                removed_atlases.remove(id);
+            }
+            AssetEvent::Removed { id } => {
+                changed_atlases.remove(id);
+                removed_atlases.insert(*id);
+            }
+            AssetEvent::Unused { .. } => {}
         }
     }
-    if loading {
-        for (_, skeleton_data_asset) in skeleton_data_assets.iter_mut() {
-            let SkeletonData {
-                atlas_handle,
-                kind,
-                status,
-                premultiplied_alpha,
-            } = skeleton_data_asset;
-            if matches!(status, SkeletonDataStatus::Loading) {
-                let atlas = if let Some(atlas) = atlases.get(atlas_handle) {
-                    atlas
-                } else {
+    let dependency_assets_changed = skeleton_data_changed
+        || !changed_atlases.is_empty()
+        || !removed_atlases.is_empty()
+        || json_changed
+        || binary_changed
+        || image_changed;
+
+    let reset_paths = if dependency_assets_changed {
+        spine_textures.clear_successfully_loaded(&asset_server)
+    } else {
+        Vec::new()
+    };
+    reset_skeleton_data_statuses(
+        &mut skeleton_data_assets,
+        &asset_server,
+        &spine_textures,
+        &reset_paths,
+    );
+
+    // Atlas page handles are resolved before skeleton data is parsed. The atlas readiness state is
+    // advanced by image asset events in `adjust_spine_textures`, so this stays an O(1) state lookup
+    // per skeleton instead of repeatedly scanning every atlas page.
+    let texture_revision = spine_textures.update(
+        asset_server.as_ref(),
+        &mut atlases,
+        &mut images,
+        &path_resolver,
+        &changed_atlases,
+        &removed_atlases,
+    );
+
+    let mut terminal_failure_received = false;
+    for failure in terminal_failures.read() {
+        terminal_failure_received = true;
+        error!(
+            id = ?failure.id,
+            path = %failure.path,
+            error = %failure.error,
+            "Spine asset failed terminally"
+        );
+        spine_textures.record_terminal_failure(&failure.path);
+    }
+
+    let textures_changed = previous_texture_revision
+        .replace(texture_revision)
+        .is_none_or(|previous| previous != texture_revision);
+    if !dependency_assets_changed
+        && !textures_changed
+        && !terminal_failure_received
+        && reset_paths.is_empty()
+    {
+        return;
+    }
+
+    let mut status_updates = Vec::new();
+    for (id, skeleton_data_asset) in skeleton_data_assets.iter() {
+        let SkeletonData {
+            atlas_handle,
+            kind,
+            status,
+            ..
+        } = skeleton_data_asset;
+        if skeleton_data_has_terminal_failure(skeleton_data_asset, &asset_server, &spine_textures) {
+            status_updates.push((id, SkeletonDataStatus::Failed, None));
+            continue;
+        }
+        if matches!(status, SkeletonDataStatus::Failed) {
+            continue;
+        }
+
+        let Some(atlas) = atlases.get(atlas_handle) else {
+            if matches!(status, SkeletonDataStatus::Loaded(_)) {
+                status_updates.push((id, SkeletonDataStatus::Loading, None));
+            }
+            continue;
+        };
+
+        let atlas_ready = match spine_textures.atlas_status(atlas_handle) {
+            Some(SpineAtlasStatus::Loaded) => true,
+            Some(SpineAtlasStatus::Loading) => atlas.atlas.pages().next().is_none(),
+            Some(SpineAtlasStatus::Failed) => {
+                error!(
+                    atlas = ?atlas_handle,
+                    "Spine atlas page image failed to load or prepare"
+                );
+                status_updates.push((id, SkeletonDataStatus::Failed, None));
+                continue;
+            }
+            None if atlas.atlas.pages().next().is_none() => true,
+            None => {
+                trace!(
+                    atlas = ?atlas_handle,
+                    "Spine atlas page readiness is not registered yet"
+                );
+                false
+            }
+        };
+        if !atlas_ready {
+            if matches!(status, SkeletonDataStatus::Loaded(_)) {
+                status_updates.push((id, SkeletonDataStatus::Loading, None));
+            }
+            continue;
+        }
+        if matches!(status, SkeletonDataStatus::Loaded(_)) {
+            continue;
+        }
+
+        let premultiplied_alpha = atlas.atlas.pages().next().map(|page| page.pma());
+        let next_status = match kind {
+            SkeletonDataKind::JsonFile(json_handle) => {
+                let Some(json) = jsons.get(json_handle) else {
                     continue;
                 };
-                if let Some(page) = atlas.atlas.pages().next() {
-                    *premultiplied_alpha = page.pma();
-                }
-                match kind {
-                    SkeletonDataKind::JsonFile(json_handle) => {
-                        let json = if let Some(json) = jsons.get(json_handle) {
-                            json
-                        } else {
-                            continue;
-                        };
-                        let skeleton_json = rusty_spine::SkeletonJson::new(atlas.atlas.clone());
-                        match skeleton_json.read_skeleton_data(&json.json) {
-                            Ok(skeleton_data) => {
-                                *status = SkeletonDataStatus::Loaded(Arc::new(skeleton_data));
-                            }
-                            Err(_err) => {
-                                *status = SkeletonDataStatus::Failed;
-                                continue;
-                            }
-                        }
-                    }
-                    SkeletonDataKind::BinaryFile(binary_handle) => {
-                        let binary = if let Some(binary) = binaries.get(binary_handle) {
-                            binary
-                        } else {
-                            continue;
-                        };
-                        let skeleton_binary = rusty_spine::SkeletonBinary::new(atlas.atlas.clone());
-                        match skeleton_binary.read_skeleton_data(&binary.binary) {
-                            Ok(skeleton_data) => {
-                                *status = SkeletonDataStatus::Loaded(Arc::new(skeleton_data));
-                            }
-                            Err(err) => {
-                                warn!("Failed to load Spine binary skeleton data: {err}");
-                                *status = SkeletonDataStatus::Failed;
-                                continue;
-                            }
-                        }
+                let skeleton_json = rusty_spine::SkeletonJson::new(atlas.atlas.clone());
+                match skeleton_json.read_skeleton_data(&json.json) {
+                    Ok(skeleton_data) => SkeletonDataStatus::Loaded(Arc::new(skeleton_data)),
+                    Err(err) => {
+                        error!("Failed to load Spine JSON skeleton data: {err}");
+                        SkeletonDataStatus::Failed
                     }
                 }
             }
-        }
+            SkeletonDataKind::BinaryFile(binary_handle) => {
+                let Some(binary) = binaries.get(binary_handle) else {
+                    continue;
+                };
+                let skeleton_binary = rusty_spine::SkeletonBinary::new(atlas.atlas.clone());
+                match skeleton_binary.read_skeleton_data(&binary.binary) {
+                    Ok(skeleton_data) => SkeletonDataStatus::Loaded(Arc::new(skeleton_data)),
+                    Err(err) => {
+                        error!("Failed to load Spine binary skeleton data: {err}");
+                        SkeletonDataStatus::Failed
+                    }
+                }
+            }
+        };
+        status_updates.push((id, next_status, premultiplied_alpha));
     }
 
-    spine_textures.update(
-        asset_server.as_ref(),
-        &mut atlases,
-        &mut texture_create_events,
-        &mut texture_dispose_events,
-    );
+    for (id, status, premultiplied_alpha) in status_updates {
+        let Some(skeleton_data_asset) = skeleton_data_assets.get_mut_untracked(id) else {
+            warn!(id = ?id, "Spine skeleton disappeared before its load status could be updated");
+            continue;
+        };
+        if let Some(premultiplied_alpha) = premultiplied_alpha
+            && skeleton_data_asset.premultiplied_alpha != premultiplied_alpha
+        {
+            skeleton_data_asset.premultiplied_alpha = premultiplied_alpha;
+        }
+        if matches!(
+            (&skeleton_data_asset.status, &status),
+            (SkeletonDataStatus::Loading, SkeletonDataStatus::Loading)
+                | (SkeletonDataStatus::Failed, SkeletonDataStatus::Failed)
+        ) {
+            continue;
+        }
+        skeleton_data_asset.status = status;
+    }
+}
+
+fn reset_skeleton_data_statuses(
+    skeleton_data_assets: &mut Assets<SkeletonData>,
+    asset_server: &AssetServer,
+    spine_textures: &SpineTextures,
+    reset_paths: &[AssetPath<'static>],
+) {
+    if reset_paths.is_empty() {
+        return;
+    }
+    let reset_ids: Vec<_> = skeleton_data_assets
+        .iter()
+        .filter_map(|(id, skeleton_data)| {
+            (matches!(skeleton_data.status, SkeletonDataStatus::Failed)
+                && reset_paths.iter().any(|path| {
+                    skeleton_data_uses_path(skeleton_data, asset_server, path)
+                        || spine_textures.atlas_uses_path(&skeleton_data.atlas_handle, path)
+                }))
+            .then_some(id)
+        })
+        .collect();
+    for id in reset_ids {
+        let Some(skeleton_data) = skeleton_data_assets.get_mut_untracked(id) else {
+            continue;
+        };
+        skeleton_data.status = SkeletonDataStatus::Loading;
+    }
+}
+
+fn skeleton_data_has_terminal_failure(
+    skeleton_data: &SkeletonData,
+    asset_server: &AssetServer,
+    spine_textures: &SpineTextures,
+) -> bool {
+    [
+        skeleton_data.atlas_handle.id().untyped(),
+        match &skeleton_data.kind {
+            SkeletonDataKind::JsonFile(handle) => handle.id().untyped(),
+            SkeletonDataKind::BinaryFile(handle) => handle.id().untyped(),
+        },
+    ]
+    .into_iter()
+    .filter_map(|id| asset_server.get_path(id))
+    .any(|path| spine_textures.has_terminal_failure(&path))
+}
+
+fn skeleton_data_uses_path(
+    skeleton_data: &SkeletonData,
+    asset_server: &AssetServer,
+    path: &AssetPath<'_>,
+) -> bool {
+    [
+        skeleton_data.atlas_handle.id().untyped(),
+        match &skeleton_data.kind {
+            SkeletonDataKind::JsonFile(handle) => handle.id().untyped(),
+            SkeletonDataKind::BinaryFile(handle) => handle.id().untyped(),
+        },
+    ]
+    .into_iter()
+    .filter_map(|id| asset_server.get_path(id))
+    .any(|dependency_path| dependency_path == *path)
 }
 
 #[allow(clippy::type_complexity)]
@@ -860,7 +1058,6 @@ fn spine_update_meshes(
     mesh_visibility_query: Query<&ViewVisibility, With<SpineMesh>>,
     mut commands: Commands,
     mut meshes_query: Query<(&ChildOf, &Children, &mut SpineMeshesUpdateState), With<SpineMeshes>>,
-    asset_server: Res<AssetServer>,
 ) {
     const CULLED_RECOVERY_INTERVAL_FRAMES: u32 = 60;
 
@@ -1064,7 +1261,13 @@ fn spine_update_meshes(
 
                     let spine_texture =
                         unsafe { &mut *(attachment_render_object as *mut SpineTexture) };
-                    let texture_path = spine_texture.0.clone();
+                    let Some(texture_handle) = spine_texture.resolved_handle.clone() else {
+                        warn_once!(
+                            path = %spine_texture.path,
+                            "Spine renderable has no resolved atlas texture handle; skipping mesh update"
+                        );
+                        break 'render;
+                    };
                     let mesh_updated = if direct_2d_rendering {
                         let mut next_direct_mesh = None;
                         let updated = {
@@ -1113,7 +1316,7 @@ fn spine_update_meshes(
                     spine_mesh.state = SpineMeshState::Renderable {
                         info: SpineMaterialInfo {
                             slot_index,
-                            texture: asset_server.load(texture_path),
+                            texture: texture_handle,
                             blend_mode,
                             premultiplied_alpha,
                         },
@@ -1176,89 +1379,6 @@ fn empty_mesh(mesh: &mut Mesh) {
     mesh.insert_attribute(DARK_COLOR_ATTRIBUTE, dark_colors);
 }
 
-#[derive(Default)]
-struct FixSpineTextures {
-    handles: Vec<(Handle<Image>, SpineTextureConfig)>,
-}
-
-/// Adjusts Spine textures to render properly.
-fn adjust_spine_textures(
-    mut local: Local<FixSpineTextures>,
-    mut spine_texture_create_events: MessageReader<SpineTextureCreateEvent>,
-    mut images: ResMut<Assets<Image>>,
-) {
-    for spine_texture_create_event in spine_texture_create_events.read() {
-        local.handles.push((
-            spine_texture_create_event.handle.clone(),
-            spine_texture_create_event.config,
-        ));
-    }
-    let mut removed_handles = vec![];
-    for (handle_index, (handle, handle_config)) in local.handles.iter().enumerate() {
-        if let Some(mut image) = images.get_mut(handle) {
-            fn convert_filter(filter: AtlasFilter) -> ImageFilterMode {
-                match filter {
-                    AtlasFilter::Nearest => ImageFilterMode::Nearest,
-                    AtlasFilter::Linear => ImageFilterMode::Linear,
-                    _ => ImageFilterMode::Nearest,
-                }
-            }
-            fn convert_wrap(wrap: AtlasWrap) -> ImageAddressMode {
-                match wrap {
-                    AtlasWrap::ClampToEdge => ImageAddressMode::ClampToEdge,
-                    AtlasWrap::MirroredRepeat => ImageAddressMode::MirrorRepeat,
-                    AtlasWrap::Repeat => ImageAddressMode::Repeat,
-                    _ => ImageAddressMode::ClampToEdge,
-                }
-            }
-            image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-                min_filter: convert_filter(handle_config.min_filter),
-                mag_filter: convert_filter(handle_config.mag_filter),
-                address_mode_u: convert_wrap(handle_config.u_wrap),
-                address_mode_v: convert_wrap(handle_config.v_wrap),
-                ..Default::default()
-            });
-            // The RGB components exported from Spine were premultiplied in nonlinear space, but need to be
-            // multiplied in linear space to render properly in Bevy.
-            if handle_config.premultiplied_alpha
-                && let Some(data) = &mut image.data
-            {
-                for i in 0..(data.len() / 4) {
-                    let mut rgba = Srgba::rgba_u8(
-                        data[i * 4],
-                        data[i * 4 + 1],
-                        data[i * 4 + 2],
-                        data[i * 4 + 3],
-                    );
-                    if rgba.alpha != 0. {
-                        rgba = Srgba::new(
-                            rgba.red / rgba.alpha,
-                            rgba.green / rgba.alpha,
-                            rgba.blue / rgba.alpha,
-                            rgba.alpha,
-                        );
-                    } else {
-                        rgba = Srgba::new(0., 0., 0., 0.);
-                    }
-                    let mut linear_rgba = LinearRgba::from(rgba);
-                    linear_rgba.red *= linear_rgba.alpha;
-                    linear_rgba.green *= linear_rgba.alpha;
-                    linear_rgba.blue *= linear_rgba.alpha;
-                    rgba = Srgba::from(linear_rgba);
-                    data[i * 4] = (rgba.red * 255.) as u8;
-                    data[i * 4 + 1] = (rgba.green * 255.) as u8;
-                    data[i * 4 + 2] = (rgba.blue * 255.) as u8;
-                    data[i * 4 + 3] = (rgba.alpha * 255.) as u8;
-                }
-            }
-            removed_handles.push(handle_index);
-        }
-    }
-    for removed_handle in removed_handles.into_iter().rev() {
-        local.handles.remove(removed_handle);
-    }
-}
-
 mod assets;
 mod crossfades;
 mod direct_render;
@@ -1271,10 +1391,10 @@ pub mod textures;
 #[doc(hidden)]
 pub mod prelude {
     pub use crate::{
-        Crossfades, SkeletonController, SkeletonData, SkeletonDataHandle, Spine, SpineBone,
-        SpineDirectMaterial2dPlugin, SpineEvent, SpineLoader, SpineMesh, SpineMeshState,
-        SpinePlugin, SpineReadyEvent, SpineSet, SpineSettings, SpineSync, SpineSyncSet,
-        SpineSyncSystem, SpineSystem,
+        Crossfades, SkeletonController, SkeletonData, SkeletonDataHandle, Spine,
+        SpineAssetLoadFailedEvent, SpineBone, SpineDirectMaterial2dPlugin, SpineEvent, SpineLoader,
+        SpineMesh, SpineMeshState, SpinePlugin, SpineReadyEvent, SpineSet, SpineSettings,
+        SpineSync, SpineSyncSet, SpineSyncSystem, SpineSystem, SpineTexturePathResolver,
     };
     pub use rusty_spine::{BoneHandle, SlotHandle};
 }
