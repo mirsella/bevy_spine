@@ -8,7 +8,7 @@ use bevy_spine::{SkeletonData, SkeletonDataHandle, Spine, SpinePlugin, SpineRead
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, SpinePlugin))
+        .add_plugins((DefaultPlugins, SpinePlugin::default()))
         .add_systems(Startup, setup)
         .add_systems(Update, on_spine_ready.in_set(SpineSet::OnReady))
         .add_systems(Update, sync_spine_viewport)

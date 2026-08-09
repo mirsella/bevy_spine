@@ -5,7 +5,12 @@ use player::{PlayerPlugin, PlayerSpawnEvent};
 
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, SpinePlugin, PlayerPlugin, BulletPlugin))
+        .add_plugins((
+            DefaultPlugins,
+            SpinePlugin::default(),
+            PlayerPlugin,
+            BulletPlugin,
+        ))
         .add_systems(Startup, setup)
         .run();
 }
