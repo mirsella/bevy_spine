@@ -1,10 +1,10 @@
-use crate::{Crossfades, SkeletonData, SpineLoader, SpineSettings};
+use crate::{Crossfades, SkeletonData, SpineSettings};
 use bevy::prelude::*;
 
 /// Attach this component to an entity to load and spawn a Spine skeleton.
 ///
 /// This component uses Bevy required components to automatically add
-/// [`SpineLoader`], [`SpineSettings`], [`Crossfades`], [`Transform`], and
+/// [`SpineSettings`], [`Crossfades`], [`Transform`], and
 /// [`Visibility`] when they are not already present.
 ///
 /// ```
@@ -18,7 +18,7 @@ use bevy::prelude::*;
 /// # }
 /// ```
 #[derive(Default, Component, Clone, Reflect)]
-#[require(SpineLoader, SpineSettings, Crossfades, Transform, Visibility)]
+#[require(SpineSettings, Crossfades, Transform, Visibility)]
 #[reflect(Component, Default, Clone)]
 pub struct SkeletonDataHandle(pub Handle<SkeletonData>);
 

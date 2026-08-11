@@ -10,7 +10,6 @@ use std::{
 
 use crate::{
     assets::{AtlasLoader, SkeletonJsonLoader},
-    direct_render::SpineDirectMesh,
     materials::{DARK_COLOR_ATTRIBUTE, SHADER_HANDLE, SpineMaterialPlugin},
     rusty_spine::{
         AnimationStateData, BoneHandle, controller::SkeletonControllerSettings, draw::CullDirection,
@@ -39,6 +38,7 @@ use rusty_spine::{
 
 pub use crate::{assets::*, crossfades::Crossfades, entity_sync::*, handle::*, rusty_spine::Color};
 pub use direct_render::SpineDirectMaterial2dPlugin;
+use direct_render::SpineDirectMesh;
 pub use textures::{SpineAssetLoadFailedEvent, SpineTexturePathResolver};
 
 /// See [`rusty_spine`] docs for more info.
@@ -53,29 +53,24 @@ pub enum SpineSystem {
     /// load. A skeleton reaches [`SkeletonDataStatus::Loaded`] only after all atlas page images
     /// are ready.
     Load,
-    /// Spawns helper entities associated with entities containing [`SkeletonDataHandle`] for
-    /// drawing meshes and (optionally) adding bone entities (see [`SpineLoader`]).
-    Spawn,
-    /// An [`bevy::ecs::schedule::ApplyDeferred`] to load the spine helper entities this frame.
-    SpawnFlush,
-    /// Sends [`SpineReadyEvent`] after [`SpineSystem::SpawnFlush`], indicating [`Spine`]
-    /// components on newly spawned entities can now be interacted with.
-    Ready,
+    /// Initializes loaded [`SkeletonDataHandle`] entities and their render helpers.
+    Initialize,
     /// Advances all animations and processes Spine events (see [`SpineEvent`]).
     UpdateAnimation,
     /// Updates all Spine meshes.
     UpdateMeshes,
     /// Updates all Spine materials.
     UpdateMaterials,
-    /// Adjusts Spine textures to render properly.
-    AdjustSpineTextures,
 }
 
 /// Helper sets for interacting with Spine systems.
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy, SystemSet)]
 pub enum SpineSet {
-    /// A helper Set occuring after [`SpineSystem::Ready`] but before Spine update systems, so that
-    /// systems can configure a newly spawned skeleton before they are updated for the first time.
+    /// Occurs after initialization commands are flushed but before Spine update systems.
+    ///
+    /// Readers of [`SpineReadyEvent`] in this set are guaranteed to observe the applied [`Spine`]
+    /// component and helper entities, and can configure a newly initialized skeleton before its
+    /// first update.
     OnReady,
     /// A helper Set occuring after [`SpineSystem::UpdateAnimation`] but before
     /// [`SpineSystem::UpdateMeshes`], so that systems can handle events immediately after the
@@ -84,6 +79,15 @@ pub enum SpineSet {
     /// A helper set occuring simultaneously with [`SpineSystem::UpdateMeshes`], useful for custom
     /// mesh creation when using [`SpineDrawer::None`].
     OnUpdateMesh,
+    /// The canonical phase for consumers to insert or replace [`SkeletonDataHandle`].
+    ///
+    /// This phase runs after [`SpineSystem::Load`] and before [`SpineSystem::Initialize`]. Deferred
+    /// commands from systems in this set are flushed automatically before initialization. If the
+    /// referenced [`SkeletonData`] is already [`SkeletonDataStatus::Loaded`], the new skeleton is
+    /// initialized, animated, meshed, and made available to Bevy's transform/visibility propagation
+    /// and render extraction in the same app frame. Asynchronously loading data remains explicitly
+    /// loading and cannot render in that frame.
+    Prepare,
 }
 
 /// Add Spine support to Bevy.
@@ -167,13 +171,11 @@ impl Plugin for SpinePlugin {
             .register_type::<SpineMeshes>()
             .register_type::<SpineMesh>()
             .register_type::<SpineMeshState>()
-            .register_type::<SpineLoader>()
             .register_type::<SpineSettings>()
             .register_type::<SpineDrawer>()
             .init_resource::<SpineEventQueue>()
             .init_resource::<SpineTexturePathResolver>()
             .insert_resource(SpineTextures::init())
-            .insert_resource(SpineReadyEvents::default())
             .add_message::<SpineAssetLoadFailedEvent>()
             .init_asset::<Atlas>()
             .init_asset::<SkeletonJson>()
@@ -188,36 +190,43 @@ impl Plugin for SpinePlugin {
             .init_asset_loader::<SkeletonBinaryLoader>()
             .add_message::<SpineReadyEvent>()
             .add_message::<SpineEvent>()
+            .configure_sets(
+                Update,
+                (
+                    SpineSystem::Load,
+                    SpineSet::Prepare,
+                    SpineSystem::Initialize,
+                    SpineSet::OnReady,
+                    SpineSystem::UpdateAnimation,
+                    SpineSet::OnEvent,
+                )
+                    .chain(),
+            )
+            .configure_sets(
+                Update,
+                (SpineSystem::UpdateMeshes, SpineSet::OnUpdateMesh)
+                    .after(SpineSet::OnEvent)
+                    .before(SpineSystem::UpdateMaterials),
+            )
             .add_systems(
                 Update,
                 (
                     spine_load.in_set(SpineSystem::Load),
-                    spine_spawn
-                        .in_set(SpineSystem::Spawn)
-                        .after(SpineSystem::Load),
-                    spine_ready
-                        .in_set(SpineSystem::Ready)
-                        .after(SpineSystem::Spawn)
+                    ApplyDeferred
+                        .after(SpineSet::Prepare)
+                        .before(SpineSystem::Initialize),
+                    spine_cleanup_removed_handles.in_set(SpineSystem::Initialize),
+                    spine_initialize.in_set(SpineSystem::Initialize),
+                    ApplyDeferred
+                        .after(SpineSystem::Initialize)
                         .before(SpineSet::OnReady),
-                    spine_update_animation
-                        .in_set(SpineSystem::UpdateAnimation)
-                        .after(SpineSet::OnReady)
-                        .before(SpineSet::OnEvent),
+                    spine_update_animation.in_set(SpineSystem::UpdateAnimation),
                     spine_update_meshes
                         .in_set(SpineSystem::UpdateMeshes)
-                        .in_set(SpineSet::OnUpdateMesh)
-                        .after(SpineSystem::UpdateAnimation)
-                        .after(SpineSet::OnEvent),
-                    ApplyDeferred
-                        .in_set(SpineSystem::SpawnFlush)
-                        .after(SpineSystem::Spawn)
-                        .before(SpineSystem::Ready),
+                        .in_set(SpineSet::OnUpdateMesh),
                 ),
             )
-            .add_systems(
-                PostUpdate,
-                textures::adjust_spine_textures.in_set(SpineSystem::AdjustSpineTextures),
-            );
+            .add_systems(PostUpdate, textures::adjust_spine_textures);
 
         load_internal_binary_asset!(
             app,
@@ -246,7 +255,7 @@ pub struct Spine(#[reflect(ignore)] pub SkeletonController);
 /// When loaded, a [`Spine`] entity has children entities attached to it, each containing this
 /// component.
 ///
-/// To disable creation of these child entities, see [`SpineLoader::without_children`].
+/// To disable creation of these child entities, see [`SpineSettings::without_bone_entities`].
 ///
 /// The bones are not automatically synchronized, but can be synchronized easily by adding a
 /// [`SpineSync`] component.
@@ -273,8 +282,9 @@ pub struct SpineMeshes;
 
 #[derive(Component, Default, Clone, Copy)]
 struct SpineMeshesUpdateState {
-    initialized: bool,
-    culled_frames: u32,
+    has_renderable_geometry: bool,
+    // `None` means no mesh update has been attempted yet.
+    culled_frames: Option<u32>,
 }
 
 /// Marker component for child entities containing [`Mesh`] components for Spine rendering.
@@ -317,71 +327,14 @@ impl core::ops::DerefMut for Spine {
     }
 }
 
-/// The async loader for Spine assets. Waits for Spine assets to be ready in the [`AssetServer`],
-/// then initializes child entities, and finally attaches the live [`Spine`] component.
-///
-/// When spawning a [`SkeletonDataHandle`], a [`SpineLoader`] is added automatically. It will create
-/// child entities representing the bones of a skeleton (see [`SpineBone`]). These bones are not
-/// synchronized (see [`SpineSync`]), and can be disabled entirely using
-/// [`SpineLoader::without_children`].
-#[derive(Component, Debug, Reflect)]
-#[reflect(Component, Debug)]
-pub enum SpineLoader {
-    /// The spine rig is still loading.
-    Loading {
-        /// If true, will spawn child entities for each bone in the skeleton (see [`SpineBone`]).
-        with_children: bool,
-    },
-    /// The spine rig is ready.
-    Ready,
-    /// The spine rig failed to load.
-    Failed,
-}
-
-impl Default for SpineLoader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SpineLoader {
-    pub fn new() -> Self {
-        Self::with_children()
-    }
-
-    pub fn with_children() -> Self {
-        Self::Loading {
-            with_children: true,
-        }
-    }
-
-    /// Load a [`Spine`] entity without child entities containing [`SpineBone`] components.
-    ///
-    /// Renderable mesh child entities are still created.
-    ///
-    /// ```
-    /// # use bevy::prelude::*;
-    /// # use bevy_spine::{SkeletonDataHandle, SpineLoader};
-    /// # fn doc(mut commands: Commands) {
-    /// commands.spawn((
-    ///     SkeletonDataHandle::default(),
-    ///     SpineLoader::without_children(),
-    /// ));
-    /// # }
-    /// ```
-    pub fn without_children() -> Self {
-        Self::Loading {
-            with_children: false,
-        }
-    }
-}
-
 /// Settings for how this Spine updates and renders.
 ///
 /// Typically set alongside [`SkeletonDataHandle`] when spawning an entity.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 #[reflect(Component, Debug, PartialEq, Clone)]
 pub struct SpineSettings {
+    /// Create child entities for the skeleton's bones.
+    pub spawn_bone_entities: bool,
     /// Indicates if default Spine materials should be used (default: `true`).
     ///
     /// If `false`, a custom [`SpineMaterial`](`materials::SpineMaterial`) should be configured for
@@ -392,7 +345,8 @@ pub struct SpineSettings {
     /// Keep rebuilding meshes even when all mesh children are currently out of view.
     ///
     /// Defaults to `false` to reduce CPU work for large numbers of off-screen skeletons.
-    /// Set this to `true` if off-screen meshes must stay fully up to date.
+    /// Hidden skeletons perform one initial mesh update. Set this to `true` if off-screen meshes
+    /// must stay fully up to date after that initial update.
     pub update_meshes_when_invisible: bool,
     /// Upload 2D Spine geometry through a direct render path instead of mutating [`Mesh`] assets.
     ///
@@ -423,6 +377,7 @@ pub enum SpineDrawer {
 impl Default for SpineSettings {
     fn default() -> Self {
         Self {
+            spawn_bone_entities: true,
             default_materials: true,
             drawer: SpineDrawer::Combined,
             update_meshes_when_invisible: false,
@@ -431,11 +386,19 @@ impl Default for SpineSettings {
     }
 }
 
-/// A [`Message`] which is sent once a [`SpineLoader`] has fully loaded a skeleton and attached the
-/// [`Spine`] component.
+impl SpineSettings {
+    /// Disables creation of [`SpineBone`] child entities. Renderable mesh children are unaffected.
+    pub fn without_bone_entities(mut self) -> Self {
+        self.spawn_bone_entities = false;
+        self
+    }
+}
+
+/// A [`Message`] sent when a skeleton has initialized.
 ///
-/// For convenience, systems receiving this event can be added to the [`SpineSet::OnReady`] set to
-/// receive this after events are sent, but before the first [`SkeletonController`] update.
+/// Initialization uses deferred commands. Systems reading this message in [`SpineSet::OnReady`]
+/// run after those commands are applied, so the entity's [`Spine`] component, mesh helpers, and
+/// optional bone helpers are available before its first [`SkeletonController`] update.
 #[derive(Debug, Clone, Message)]
 pub struct SpineReadyEvent {
     /// The entity containing the [`Spine`] component.
@@ -497,10 +460,6 @@ pub enum SpineEvent {
         balance: f32,
     },
 }
-
-/// Queued ready events, to be sent after [`SpineSystem::SpawnFlush`].
-#[derive(Default, Resource)]
-struct SpineReadyEvents(Vec<SpineReadyEvent>);
 
 #[allow(clippy::too_many_arguments)]
 fn spine_load(
@@ -763,194 +722,223 @@ fn skeleton_data_uses_path(
     .any(|dependency_path| dependency_path == *path)
 }
 
+#[derive(Component)]
+#[relationship(relationship_target = SpineHelpers)]
+struct SpineHelperOf(Entity);
+
+#[derive(Component, Default)]
+#[relationship_target(relationship = SpineHelperOf, linked_spawn)]
+struct SpineHelpers(Vec<Entity>);
+
+fn clear_spine_runtime(spine_entity: Entity, commands: &mut Commands) {
+    if let Ok(mut root) = commands.get_entity(spine_entity) {
+        root.despawn_related::<SpineHelpers>()
+            .remove::<(Spine, SpineHelpers)>();
+    }
+}
+
+fn spine_cleanup_removed_handles(
+    mut removed_handles: RemovedComponents<SkeletonDataHandle>,
+    runtime_roots: Query<(Has<Spine>, Has<SpineHelpers>), Without<SkeletonDataHandle>>,
+    mut commands: Commands,
+) {
+    for entity in removed_handles.read() {
+        let Ok((has_spine, has_helpers)) = runtime_roots.get(entity) else {
+            continue;
+        };
+        if !has_spine && !has_helpers {
+            continue;
+        }
+        clear_spine_runtime(entity, &mut commands);
+    }
+}
+
 #[allow(clippy::type_complexity)]
-fn spine_spawn(
-    mut skeleton_query: Query<(
-        &mut SpineLoader,
+fn spine_initialize(
+    skeleton_query: Query<(
         Entity,
-        &SkeletonDataHandle,
+        Ref<SkeletonDataHandle>,
+        &SpineSettings,
         Option<&Crossfades>,
         Option<&RenderLayers>,
+        Has<Spine>,
+        Option<&SpineHelpers>,
     )>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut ready_events: ResMut<SpineReadyEvents>,
-    mut skeleton_data_assets: ResMut<Assets<SkeletonData>>,
+    mut ready_events: MessageWriter<SpineReadyEvent>,
+    skeleton_data_assets: Res<Assets<SkeletonData>>,
     spine_event_queue: Res<SpineEventQueue>,
 ) {
-    for (mut spine_loader, spine_entity, data_handle, crossfades, render_layers) in
-        skeleton_query.iter_mut()
+    for (spine_entity, data_handle, settings, crossfades, render_layers, has_spine, helpers) in
+        &skeleton_query
     {
-        if let SpineLoader::Loading { with_children } = spine_loader.as_ref() {
-            let skeleton_data_asset =
-                if let Some(skeleton_data_asset) = skeleton_data_assets.get_mut(&data_handle.0) {
-                    skeleton_data_asset
-                } else {
-                    continue;
-                };
-            match &skeleton_data_asset.status {
-                SkeletonDataStatus::Loaded(skeleton_data) => {
-                    let mut animation_state_data = AnimationStateData::new(skeleton_data.clone());
-                    if let Some(crossfades) = crossfades {
-                        crossfades.apply(&mut animation_state_data);
-                    }
-                    let mut controller = SkeletonController::new(
-                        skeleton_data.clone(),
-                        Arc::new(animation_state_data),
-                    )
-                    .with_settings(
-                        SkeletonControllerSettings::new()
-                            .with_cull_direction(CullDirection::CounterClockwise)
-                            .with_premultiplied_alpha(skeleton_data_asset.premultiplied_alpha),
-                    );
-                    let events = spine_event_queue.0.clone();
-                    controller
-                        .animation_state
-                        .set_listener(move |_, animation_event| match animation_event {
-                            AnimationEvent::Start { track_entry } => {
-                                let mut events = events.lock().unwrap();
-                                events.push_back(SpineEvent::Start {
-                                    entity: spine_entity,
-                                    animation: track_entry.animation().name().to_owned(),
-                                });
-                            }
-                            AnimationEvent::Interrupt { track_entry } => {
-                                let mut events = events.lock().unwrap();
-                                events.push_back(SpineEvent::Interrupt {
-                                    entity: spine_entity,
-                                    animation: track_entry.animation().name().to_owned(),
-                                });
-                            }
-                            AnimationEvent::End { track_entry } => {
-                                let mut events = events.lock().unwrap();
-                                events.push_back(SpineEvent::End {
-                                    entity: spine_entity,
-                                    animation: track_entry.animation().name().to_owned(),
-                                });
-                            }
-                            AnimationEvent::Complete { track_entry } => {
-                                let mut events = events.lock().unwrap();
-                                events.push_back(SpineEvent::Complete {
-                                    entity: spine_entity,
-                                    animation: track_entry.animation().name().to_owned(),
-                                });
-                            }
-                            AnimationEvent::Dispose { .. } => {
-                                let mut events = events.lock().unwrap();
-                                events.push_back(SpineEvent::Dispose {
-                                    entity: spine_entity,
-                                });
-                            }
-                            AnimationEvent::Event {
-                                name,
+        if !data_handle.is_changed() && has_spine {
+            continue;
+        }
+        if data_handle.is_changed() || helpers.is_some_and(|helpers| !helpers.is_empty()) {
+            clear_spine_runtime(spine_entity, &mut commands);
+        }
+
+        let Some(skeleton_data_asset) = skeleton_data_assets.get(&data_handle.0) else {
+            continue;
+        };
+        match &skeleton_data_asset.status {
+            SkeletonDataStatus::Loaded(skeleton_data) => {
+                let mut animation_state_data = AnimationStateData::new(skeleton_data.clone());
+                if let Some(crossfades) = crossfades {
+                    crossfades.apply(&mut animation_state_data);
+                }
+                let mut controller =
+                    SkeletonController::new(skeleton_data.clone(), Arc::new(animation_state_data))
+                        .with_settings(
+                            SkeletonControllerSettings::new()
+                                .with_cull_direction(CullDirection::CounterClockwise)
+                                .with_premultiplied_alpha(skeleton_data_asset.premultiplied_alpha),
+                        );
+                let events = spine_event_queue.0.clone();
+                controller
+                    .animation_state
+                    .set_listener(move |_, animation_event| match animation_event {
+                        AnimationEvent::Start { track_entry } => {
+                            let mut events = events.lock().unwrap();
+                            events.push_back(SpineEvent::Start {
+                                entity: spine_entity,
+                                animation: track_entry.animation().name().to_owned(),
+                            });
+                        }
+                        AnimationEvent::Interrupt { track_entry } => {
+                            let mut events = events.lock().unwrap();
+                            events.push_back(SpineEvent::Interrupt {
+                                entity: spine_entity,
+                                animation: track_entry.animation().name().to_owned(),
+                            });
+                        }
+                        AnimationEvent::End { track_entry } => {
+                            let mut events = events.lock().unwrap();
+                            events.push_back(SpineEvent::End {
+                                entity: spine_entity,
+                                animation: track_entry.animation().name().to_owned(),
+                            });
+                        }
+                        AnimationEvent::Complete { track_entry } => {
+                            let mut events = events.lock().unwrap();
+                            events.push_back(SpineEvent::Complete {
+                                entity: spine_entity,
+                                animation: track_entry.animation().name().to_owned(),
+                            });
+                        }
+                        AnimationEvent::Dispose { .. } => {
+                            let mut events = events.lock().unwrap();
+                            events.push_back(SpineEvent::Dispose {
+                                entity: spine_entity,
+                            });
+                        }
+                        AnimationEvent::Event {
+                            name,
+                            int,
+                            float,
+                            string,
+                            audio_path,
+                            volume,
+                            balance,
+                            ..
+                        } => {
+                            let mut events = events.lock().unwrap();
+                            events.push_back(SpineEvent::Event {
+                                entity: spine_entity,
+                                name: name.to_owned(),
                                 int,
                                 float,
-                                string,
-                                audio_path,
+                                string: string.to_owned(),
+                                audio_path: audio_path.to_owned(),
                                 volume,
                                 balance,
-                                ..
-                            } => {
-                                let mut events = events.lock().unwrap();
-                                events.push_back(SpineEvent::Event {
-                                    entity: spine_entity,
-                                    name: name.to_owned(),
-                                    int,
-                                    float,
-                                    string: string.to_owned(),
-                                    audio_path: audio_path.to_owned(),
-                                    volume,
-                                    balance,
-                                });
+                            });
+                        }
+                    });
+                controller.skeleton.set_to_setup_pose();
+                let mesh_count = controller.skeleton.slots().count();
+                let render_layers = render_layers.cloned();
+                let mut bones = HashMap::new();
+                let Ok(mut entity_commands) = commands.get_entity(spine_entity) else {
+                    warn!(
+                        entity = ?spine_entity,
+                        "Spine finished loading, but the entity no longer exists; skipping spawn"
+                    );
+                    continue;
+                };
+
+                entity_commands
+                    .with_children(|parent| {
+                        let render_layers_for_children = render_layers.clone();
+                        let mut spine_meshes_commands = parent.spawn((
+                            Name::new("spine_meshes"),
+                            SpineHelperOf(spine_entity),
+                            SpineMeshes,
+                            SpineMeshesUpdateState::default(),
+                            Transform::default(),
+                            GlobalTransform::default(),
+                            Visibility::default(),
+                            InheritedVisibility::default(),
+                            ViewVisibility::default(),
+                        ));
+
+                        if let Some(render_layers) = &render_layers_for_children {
+                            spine_meshes_commands.insert(render_layers.clone());
+                        }
+                        spine_meshes_commands.with_children(|parent| {
+                            let render_layers_for_meshes = render_layers_for_children.clone();
+                            let mut z = 0.;
+                            for index in 0..mesh_count {
+                                let mut mesh = Mesh::new(
+                                    PrimitiveTopology::TriangleList,
+                                    RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+                                );
+                                empty_mesh(&mut mesh);
+                                let mesh_handle = meshes.add(mesh);
+
+                                let mut mesh_commands = parent.spawn((
+                                    Name::new(format!("spine_mesh {index}")),
+                                    SpineHelperOf(spine_entity),
+                                    SpineMesh {
+                                        spine_entity,
+                                        handle: mesh_handle,
+                                        state: SpineMeshState::Empty,
+                                    },
+                                    Transform::from_xyz(0., 0., z),
+                                    GlobalTransform::default(),
+                                    Visibility::default(),
+                                    InheritedVisibility::default(),
+                                    ViewVisibility::default(),
+                                ));
+
+                                if let Some(render_layers) = &render_layers_for_meshes {
+                                    mesh_commands.insert(render_layers.clone());
+                                }
+                                z += 0.001;
                             }
                         });
-                    controller.skeleton.set_to_setup_pose();
-                    let mesh_count = controller.skeleton.slots().count();
-                    let render_layers = render_layers.cloned();
-                    let with_children = *with_children;
-                    let mut bones = HashMap::new();
-                    let Ok(mut entity_commands) = commands.get_entity(spine_entity) else {
-                        warn!(
-                            entity = ?spine_entity,
-                            "Spine finished loading, but the entity no longer exists; skipping spawn"
-                        );
-                        continue;
-                    };
 
-                    entity_commands
-                        .with_children(|parent| {
-                            let render_layers_for_children = render_layers.clone();
-                            let mut spine_meshes_commands = parent.spawn((
-                                Name::new("spine_meshes"),
-                                SpineMeshes,
-                                SpineMeshesUpdateState::default(),
-                                Transform::default(),
-                                GlobalTransform::default(),
-                                Visibility::default(),
-                                InheritedVisibility::default(),
-                                ViewVisibility::default(),
-                            ));
-
-                            if let Some(render_layers) = &render_layers_for_children {
-                                spine_meshes_commands.insert(render_layers.clone());
-                            }
-                            spine_meshes_commands.with_children(|parent| {
-                                let render_layers_for_meshes = render_layers_for_children.clone();
-                                let mut z = 0.;
-                                for index in 0..mesh_count {
-                                    let mut mesh = Mesh::new(
-                                        PrimitiveTopology::TriangleList,
-                                        RenderAssetUsages::MAIN_WORLD
-                                            | RenderAssetUsages::RENDER_WORLD,
-                                    );
-                                    empty_mesh(&mut mesh);
-                                    let mesh_handle = meshes.add(mesh);
-
-                                    let mut mesh_commands = parent.spawn((
-                                        Name::new(format!("spine_mesh {index}")),
-                                        SpineMesh {
-                                            spine_entity,
-                                            handle: mesh_handle,
-                                            state: SpineMeshState::Empty,
-                                        },
-                                        Transform::from_xyz(0., 0., z),
-                                        GlobalTransform::default(),
-                                        Visibility::default(),
-                                        InheritedVisibility::default(),
-                                        ViewVisibility::default(),
-                                    ));
-
-                                    if let Some(render_layers) = &render_layers_for_meshes {
-                                        mesh_commands.insert(render_layers.clone());
-                                    }
-                                    z += 0.001;
-                                }
-                            });
-
-                            if with_children {
-                                spawn_bones(
-                                    spine_entity,
-                                    None,
-                                    parent,
-                                    &controller.skeleton,
-                                    controller.skeleton.bone_root().handle(),
-                                    render_layers_for_children.as_ref(),
-                                    &mut bones,
-                                );
-                            }
-                        })
-                        .insert(Spine(controller));
-                    *spine_loader = SpineLoader::Ready;
-                    ready_events.0.push(SpineReadyEvent {
-                        entity: spine_entity,
-                        bones,
-                    });
-                }
-                SkeletonDataStatus::Loading => {}
-                SkeletonDataStatus::Failed => {
-                    *spine_loader = SpineLoader::Failed;
-                }
+                        if settings.spawn_bone_entities {
+                            spawn_bones(
+                                spine_entity,
+                                None,
+                                parent,
+                                &controller.skeleton,
+                                controller.skeleton.bone_root().handle(),
+                                render_layers_for_children.as_ref(),
+                                &mut bones,
+                            );
+                        }
+                    })
+                    .insert(Spine(controller));
+                ready_events.write(SpineReadyEvent {
+                    entity: spine_entity,
+                    bones,
+                });
             }
+            SkeletonDataStatus::Loading | SkeletonDataStatus::Failed => {}
         }
     }
 }
@@ -974,6 +962,7 @@ fn spawn_bones(
         transform.scale.y = bone.applied_scale_y();
         let mut bone_entity_commands = spawner.spawn((
             Name::new(format!("spine_bone ({})", bone.data().name())),
+            SpineHelperOf(spine_entity),
             transform,
             GlobalTransform::default(),
             Visibility::default(),
@@ -1012,22 +1001,13 @@ fn spawn_bones(
     }
 }
 
-fn spine_ready(
-    mut ready_events: ResMut<SpineReadyEvents>,
-    mut ready_writer: MessageWriter<SpineReadyEvent>,
-) {
-    for event in take(&mut ready_events.0).into_iter() {
-        ready_writer.write(event);
-    }
-}
-
 fn spine_update_animation(
-    mut spine_query: Query<(Entity, &mut Spine)>,
+    mut spine_query: Query<&mut Spine>,
     mut spine_events: MessageWriter<SpineEvent>,
     time: Res<Time>,
     spine_event_queue: Res<SpineEventQueue>,
 ) {
-    for (_, mut spine) in spine_query.iter_mut() {
+    for mut spine in &mut spine_query {
         spine.update(time.delta_secs(), Physics::Update);
     }
     {
@@ -1085,10 +1065,6 @@ fn spine_update_meshes(
             continue;
         };
 
-        if !inherited_visibility.get() {
-            continue;
-        }
-
         let SpineSettings {
             drawer,
             update_meshes_when_invisible,
@@ -1096,20 +1072,34 @@ fn spine_update_meshes(
             ..
         } = spine_settings.copied().unwrap_or_default();
 
-        if !update_meshes_when_invisible && update_state.initialized {
+        // Newly initialized skeletons must produce their first geometry even though Bevy has not
+        // propagated their inherited visibility yet. Established hidden skeletons retain the
+        // normal off-screen optimization.
+        if update_state.culled_frames.is_some()
+            && !inherited_visibility.get()
+            && !update_meshes_when_invisible
+        {
+            continue;
+        }
+
+        if !update_meshes_when_invisible
+            && inherited_visibility.get()
+            && update_state.has_renderable_geometry
+        {
             let any_visible = meshes_children.iter().any(|child| {
                 mesh_visibility_query
                     .get(child)
                     .is_ok_and(|visibility| visibility.get())
             });
             if !any_visible {
-                update_state.culled_frames = update_state.culled_frames.saturating_add(1);
+                let culled_frames = update_state.culled_frames.get_or_insert(0);
+                *culled_frames = culled_frames.saturating_add(1);
 
-                if update_state.culled_frames < CULLED_RECOVERY_INTERVAL_FRAMES {
+                if *culled_frames < CULLED_RECOVERY_INTERVAL_FRAMES {
                     continue;
                 }
             } else {
-                update_state.culled_frames = 0;
+                update_state.culled_frames = Some(0);
             }
         }
 
@@ -1129,6 +1119,7 @@ fn spine_update_meshes(
         };
         let mut z = 0.;
         let mut renderable_index = 0;
+        let mut has_renderable_geometry = false;
         for child in meshes_children.iter() {
             if let Ok((
                 spine_mesh_entity,
@@ -1240,7 +1231,7 @@ fn spine_update_meshes(
                     let Some(attachment_render_object) = attachment_renderer_object else {
                         break 'render;
                     };
-                    if vertices.is_empty() {
+                    if vertices.is_empty() || indices.is_empty() {
                         break 'render;
                     }
 
@@ -1330,6 +1321,7 @@ fn spine_update_meshes(
                     );
                     z += 0.001;
                     empty = false;
+                    has_renderable_geometry = true;
                 }
                 if empty {
                     spine_mesh.state = SpineMeshState::Empty;
@@ -1351,8 +1343,8 @@ fn spine_update_meshes(
             }
         }
 
-        update_state.initialized = true;
-        update_state.culled_frames = 0;
+        update_state.has_renderable_geometry |= has_renderable_geometry;
+        update_state.culled_frames = Some(0);
     }
 }
 
@@ -1392,9 +1384,275 @@ pub mod textures;
 pub mod prelude {
     pub use crate::{
         Crossfades, SkeletonController, SkeletonData, SkeletonDataHandle, Spine,
-        SpineAssetLoadFailedEvent, SpineBone, SpineDirectMaterial2dPlugin, SpineEvent, SpineLoader,
-        SpineMesh, SpineMeshState, SpinePlugin, SpineReadyEvent, SpineSet, SpineSettings,
-        SpineSync, SpineSyncSet, SpineSyncSystem, SpineSystem, SpineTexturePathResolver,
+        SpineAssetLoadFailedEvent, SpineBone, SpineDirectMaterial2dPlugin, SpineEvent, SpineMesh,
+        SpineMeshState, SpinePlugin, SpineReadyEvent, SpineSet, SpineSettings, SpineSync,
+        SpineSyncSet, SpineSyncSystem, SpineSystem, SpineTexturePathResolver,
     };
     pub use rusty_spine::{BoneHandle, SlotHandle};
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use bevy::asset::AssetPlugin;
+    use bevy::sprite_render::MeshMaterial2d;
+
+    use super::*;
+
+    #[derive(Resource)]
+    struct SpawnedSkeletons {
+        loaded: Entity,
+        loading: Entity,
+    }
+
+    #[derive(Resource)]
+    struct ReplaceSkeleton(Entity);
+
+    #[derive(Resource)]
+    struct FinishLoading(Entity);
+
+    #[derive(Default, Resource)]
+    struct ObservedReady(Vec<Entity>);
+
+    fn loaded_spineboy_skeleton() -> Arc<rusty_spine::SkeletonData> {
+        let atlas = Arc::new(
+            rusty_spine::Atlas::new(
+                include_bytes!("../assets/spineboy/export/spineboy-pma.atlas"),
+                Path::new(""),
+            )
+            .expect("test atlas should parse"),
+        );
+        for page in atlas.pages() {
+            let mut renderer_object = page.renderer_object();
+            let texture = unsafe { renderer_object.get::<SpineTexture>() }
+                .expect("Spine texture callbacks should attach page metadata");
+            texture.resolved_handle = Some(Handle::default());
+        }
+        Arc::new(
+            rusty_spine::SkeletonJson::new(atlas)
+                .read_skeleton_data(include_bytes!(
+                    "../assets/spineboy/export/spineboy-pro.json"
+                ))
+                .expect("test skeleton should parse"),
+        )
+    }
+
+    fn loaded_skeleton_asset() -> SkeletonData {
+        SkeletonData {
+            atlas_handle: default(),
+            kind: SkeletonDataKind::JsonFile(default()),
+            status: SkeletonDataStatus::Loaded(loaded_spineboy_skeleton()),
+            premultiplied_alpha: true,
+        }
+    }
+
+    fn test_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Image>()
+            .init_asset::<Mesh>()
+            .init_asset::<Shader>()
+            .init_asset::<SpineNormalPmaMaterial>()
+            .add_plugins(SpinePlugin::without_built_in_materials())
+            // The CPU material updater only: no `Material2dPlugin` or GPU render resources.
+            .add_plugins(SpineMaterialPlugin::<SpineNormalPmaMaterial>::default())
+            .init_resource::<ObservedReady>()
+            .add_systems(
+                Update,
+                (
+                    spawn_preloaded_skeletons.run_if(not(resource_exists::<SpawnedSkeletons>)),
+                    replace_with_preloaded_skeleton.run_if(resource_exists::<ReplaceSkeleton>),
+                    finish_loading.run_if(resource_exists::<FinishLoading>),
+                )
+                    .in_set(SpineSet::Prepare),
+            )
+            .add_systems(Update, observe_ready.in_set(SpineSet::OnReady));
+        app
+    }
+
+    fn observe_ready(
+        mut events: MessageReader<SpineReadyEvent>,
+        ready: Query<&SpineHelpers, With<Spine>>,
+        mut observed: ResMut<ObservedReady>,
+    ) {
+        for event in events.read() {
+            let helpers = ready
+                .get(event.entity)
+                .expect("OnReady must observe applied Spine runtime components");
+            assert!(!helpers.is_empty());
+            observed.0.push(event.entity);
+        }
+    }
+
+    fn spawn_preloaded_skeletons(
+        mut commands: Commands,
+        mut skeletons: ResMut<Assets<SkeletonData>>,
+    ) {
+        let loaded = skeletons.add(loaded_skeleton_asset());
+        let loading = skeletons.add(SkeletonData::new_from_json(default(), default()));
+        let loaded = commands
+            .spawn((
+                SkeletonDataHandle(loaded),
+                SpineSettings::default(),
+                Visibility::Visible,
+            ))
+            .id();
+        let loading = commands
+            .spawn((
+                SkeletonDataHandle(loading),
+                SpineSettings::default().without_bone_entities(),
+            ))
+            .id();
+        commands.insert_resource(SpawnedSkeletons { loaded, loading });
+    }
+
+    fn replace_with_preloaded_skeleton(
+        mut commands: Commands,
+        mut skeletons: ResMut<Assets<SkeletonData>>,
+        replacement: Res<ReplaceSkeleton>,
+    ) {
+        commands
+            .entity(replacement.0)
+            .insert(SkeletonDataHandle(skeletons.add(loaded_skeleton_asset())));
+        commands.remove_resource::<ReplaceSkeleton>();
+    }
+
+    fn finish_loading(
+        mut commands: Commands,
+        handles: Query<&SkeletonDataHandle>,
+        mut skeletons: ResMut<Assets<SkeletonData>>,
+        request: Res<FinishLoading>,
+    ) {
+        let handle = &handles.get(request.0).unwrap().0;
+        let asset = skeletons.get_mut_untracked(handle).unwrap();
+        asset.status = SkeletonDataStatus::Loaded(loaded_spineboy_skeleton());
+        asset.premultiplied_alpha = true;
+        commands.remove_resource::<FinishLoading>();
+    }
+
+    fn renderable_meshes_for(world: &mut World, spine_entity: Entity) -> Vec<Entity> {
+        let mut query = world.query::<(Entity, &SpineMesh)>();
+        query
+            .iter(world)
+            .filter_map(|(entity, spine_mesh)| {
+                (spine_mesh.spine_entity == spine_entity
+                    && matches!(spine_mesh.state, SpineMeshState::Renderable { .. }))
+                .then_some(entity)
+            })
+            .collect()
+    }
+
+    fn spine_helpers(world: &World, spine_entity: Entity) -> Vec<Entity> {
+        world
+            .get::<SpineHelpers>(spine_entity)
+            .map(|helpers| helpers.iter().collect())
+            .unwrap_or_default()
+    }
+
+    fn reparent(world: &mut World, entities: &[Entity], parent: Entity) {
+        for &entity in entities {
+            world.entity_mut(entity).insert(ChildOf(parent));
+        }
+    }
+
+    fn assert_ready_and_renderable(app: &mut App, spine_entity: Entity) {
+        let renderable_meshes = renderable_meshes_for(app.world_mut(), spine_entity);
+        let world = app.world();
+        assert!(world.entity(spine_entity).contains::<Spine>());
+        let mesh_entity = renderable_meshes
+            .into_iter()
+            .find(|entity| {
+                world
+                    .get::<MeshMaterial2d<SpineNormalPmaMaterial>>(*entity)
+                    .is_some()
+            })
+            .expect("ready Spine should have renderable geometry and its built-in material");
+        let spine_mesh = world.get::<SpineMesh>(mesh_entity).unwrap();
+        assert_eq!(
+            world.get::<Mesh2d>(mesh_entity).unwrap().0,
+            spine_mesh.handle
+        );
+        assert!(world.entity(mesh_entity).contains::<Aabb>());
+        let mesh = world
+            .resource::<Assets<Mesh>>()
+            .get(&spine_mesh.handle)
+            .unwrap();
+        assert!(mesh.count_vertices() > 0);
+        assert!(mesh.indices().is_some_and(|indices| !indices.is_empty()));
+        assert_eq!(
+            world.resource::<ObservedReady>().0.last(),
+            Some(&spine_entity)
+        );
+    }
+
+    fn assert_despawned(world: &World, entities: &[Entity]) {
+        assert!(
+            entities
+                .iter()
+                .all(|entity| !world.entities().contains(*entity))
+        );
+    }
+
+    #[test]
+    fn preloaded_prepare_and_runtime_rebuilds_finish_in_the_same_update() {
+        let mut app = test_app();
+        app.update();
+        let (loaded, loading) = {
+            let spawned = app.world().resource::<SpawnedSkeletons>();
+            (spawned.loaded, spawned.loading)
+        };
+        assert_ready_and_renderable(&mut app, loaded);
+        assert!(!app.world().entity(loading).contains::<Spine>());
+
+        let initial_helpers = spine_helpers(app.world(), loaded);
+        let unrelated_parent = app.world_mut().spawn_empty().id();
+        let authored_child = app.world_mut().spawn(ChildOf(loaded)).id();
+        reparent(app.world_mut(), &initial_helpers, unrelated_parent);
+        app.world_mut().insert_resource(ReplaceSkeleton(loaded));
+        app.update();
+        assert_ready_and_renderable(&mut app, loaded);
+        assert_despawned(app.world(), &initial_helpers);
+        assert!(app.world().entities().contains(authored_child));
+
+        let replacement_helpers = spine_helpers(app.world(), loaded);
+        reparent(app.world_mut(), &replacement_helpers, unrelated_parent);
+        app.world_mut().entity_mut(loaded).remove::<Spine>();
+        app.world_mut().insert_resource(FinishLoading(loaded));
+        app.update();
+        assert_ready_and_renderable(&mut app, loaded);
+        assert_despawned(app.world(), &replacement_helpers);
+        assert!(app.world().entities().contains(authored_child));
+
+        let rebuilt_helpers = spine_helpers(app.world(), loaded);
+        reparent(app.world_mut(), &rebuilt_helpers, unrelated_parent);
+        app.world_mut()
+            .entity_mut(loaded)
+            .remove::<SkeletonDataHandle>();
+        app.update();
+        assert!(!app.world().entity(loaded).contains::<Spine>());
+        assert!(!app.world().entity(loaded).contains::<SpineHelpers>());
+        assert_despawned(app.world(), &rebuilt_helpers);
+        assert!(app.world().entities().contains(authored_child));
+        assert!(app.world().entities().contains(unrelated_parent));
+    }
+
+    #[test]
+    fn loading_request_initializes_after_the_asset_becomes_loaded() {
+        let mut app = test_app();
+        app.update();
+        app.update();
+        let loading = app.world().resource::<SpawnedSkeletons>().loading;
+        assert!(!app.world().entity(loading).contains::<Spine>());
+        assert!(!app.world().entity(loading).contains::<SpineHelpers>());
+
+        app.world_mut().insert_resource(FinishLoading(loading));
+        app.update();
+        assert_ready_and_renderable(&mut app, loading);
+        assert!(
+            spine_helpers(app.world(), loading)
+                .iter()
+                .all(|entity| !app.world().entity(*entity).contains::<SpineBone>())
+        );
+    }
 }

@@ -201,7 +201,7 @@ pub fn spine_sync_entities_applied<S: SpineSynchronizer>(
 ///
 /// ```
 /// # use bevy::prelude::*;
-/// # use bevy_spine::{SkeletonDataHandle, SpineLoader, SpineSync};
+/// # use bevy_spine::{SkeletonDataHandle, SpineSync};
 /// # fn doc(mut commands: Commands) {
 /// commands.spawn((
 ///     SkeletonDataHandle::default(),

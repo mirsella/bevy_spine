@@ -122,12 +122,16 @@ fn extract_spine_direct_meshes(
     mut extracted_meshes: Query<&mut SpineDirectMesh>,
 ) {
     for (render_entity, visibility, source) in &meshes {
-        if !visibility.get() {
-            continue;
-        }
         if let Ok(mut target) = extracted_meshes.get_mut(render_entity) {
-            target.clone_from(source);
-        } else {
+            // Clearing hidden geometry is required because packing visits all extracted direct
+            // meshes rather than only visible entities. Vec::clone_from reuses existing capacity.
+            if visibility.get() {
+                target.vertices.clone_from(&source.vertices);
+                target.indices.clone_from(&source.indices);
+            } else {
+                target.clear();
+            }
+        } else if visibility.get() {
             commands.entity(render_entity).insert(source.clone());
         }
     }
@@ -209,18 +213,22 @@ pub(crate) struct SpineDirectRenderPlugin;
 
 impl Plugin for SpineDirectRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(SyncComponentPlugin::<SpineDirectMesh>::default());
-
-        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app
-                .init_resource::<SpineDirectMeshLayout>()
-                .init_resource::<SpineDirectMeshBuffers>()
-                .add_systems(ExtractSchedule, extract_spine_direct_meshes)
-                .add_systems(
-                    Render,
-                    prepare_spine_direct_mesh_buffers.in_set(RenderSystems::PrepareResources),
-                );
+        if app.get_sub_app(RenderApp).is_none() {
+            return;
         }
+
+        app.add_plugins(SyncComponentPlugin::<SpineDirectMesh>::default());
+        let render_app = app
+            .get_sub_app_mut(RenderApp)
+            .expect("render app was checked above");
+        render_app
+            .init_resource::<SpineDirectMeshLayout>()
+            .init_resource::<SpineDirectMeshBuffers>()
+            .add_systems(ExtractSchedule, extract_spine_direct_meshes)
+            .add_systems(
+                Render,
+                prepare_spine_direct_mesh_buffers.in_set(RenderSystems::PrepareResources),
+            );
     }
 }
 
@@ -523,5 +531,62 @@ impl<P: bevy::render::render_phase::PhaseItem> RenderCommand<P> for DrawSpineDir
         pass.draw_indexed(mesh.clone(), 0, item.batch_range().clone());
 
         RenderCommandResult::Success
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::schedule::ScheduleLabel;
+    use bevy::render::{
+        Render, RenderApp,
+        extract_plugin::{ExtractPlugin, ExtractSchedule},
+        sync_component::SyncComponentPlugin,
+        sync_world::RenderEntity,
+    };
+
+    use super::*;
+
+    fn extracted(app: &App, entity: Entity) -> &SpineDirectMesh {
+        app.get_sub_app(RenderApp)
+            .unwrap()
+            .world()
+            .get::<SpineDirectMesh>(entity)
+            .unwrap()
+    }
+
+    #[test]
+    fn extraction_clears_hidden_geometry_and_restores_it_when_shown() {
+        let mut app = App::new();
+        app.add_plugins((
+            ExtractPlugin::default(),
+            SyncComponentPlugin::<SpineDirectMesh>::default(),
+        ));
+        let render_app = app.get_sub_app_mut(RenderApp).unwrap();
+        render_app.add_systems(ExtractSchedule, extract_spine_direct_meshes);
+        render_app.update_schedule = Some(Render.intern());
+
+        let source = SpineDirectMesh {
+            vertices: vec![bytemuck::Zeroable::zeroed()],
+            indices: vec![0],
+        };
+        let entity = app
+            .world_mut()
+            .spawn((source.clone(), ViewVisibility::VISIBLE))
+            .id();
+        app.update();
+        let render_entity = app.world().get::<RenderEntity>(entity).unwrap().id();
+        assert_eq!(extracted(&app, render_entity).vertices.len(), 1);
+
+        *app.world_mut().get_mut::<ViewVisibility>(entity).unwrap() = ViewVisibility::HIDDEN;
+        app.update();
+        assert!(extracted(&app, render_entity).vertices.is_empty());
+
+        *app.world_mut().get_mut::<ViewVisibility>(entity).unwrap() = ViewVisibility::VISIBLE;
+        app.update();
+        assert_eq!(
+            extracted(&app, render_entity).vertices[0].position,
+            source.vertices[0].position
+        );
+        assert_eq!(extracted(&app, render_entity).indices, source.indices);
     }
 }

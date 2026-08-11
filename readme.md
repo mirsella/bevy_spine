@@ -29,6 +29,22 @@ bevy_spine = "0.12"
 
 All Spine features are implemented. If you notice something is broken, please submit an issue. The Bevy API needs a lot of work and feedback is welcome.
 
+## Same-frame spawning
+
+Systems that dynamically spawn `SkeletonDataHandle` entities should run in
+`SpineSet::Prepare`. The plugin owns the ordering and deferred-command flushes from that phase through
+skeleton initialization, first animation update, mesh/material generation, Bevy transform and
+visibility propagation, and render extraction. If the referenced `SkeletonData` is already
+`SkeletonDataStatus::Loaded`, its geometry is available to the renderer in the same app frame.
+
+```rust
+app.add_systems(Update, spawn_skeleton.in_set(SpineSet::Prepare));
+```
+
+This guarantee cannot bypass asynchronous loading. A handle whose data or atlas page textures are
+not ready remains loading and is initialized by the same pipeline after it reaches
+`SkeletonDataStatus::Loaded`.
+
 ## License
 
 This code is licensed under dual MIT / Apache-2.0 but with no attribution necessary. All contributions must agree to this licensing.

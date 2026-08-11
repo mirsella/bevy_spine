@@ -2,14 +2,7 @@
 
 use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
-use bevy_spine::{
-    SkeletonData, SkeletonDataHandle, Spine, SpinePlugin, SpineReadyEvent, SpineSet, SpineSystem,
-};
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
-pub enum ExampleSet {
-    Spawn,
-}
+use bevy_spine::{SkeletonData, SkeletonDataHandle, Spine, SpinePlugin, SpineReadyEvent, SpineSet};
 
 fn main() {
     App::new()
@@ -19,11 +12,9 @@ fn main() {
         .add_systems(
             Update,
             (
-                spawn.in_set(ExampleSet::Spawn).after(SpineSystem::Load),
+                // `SpineSet::Prepare` is the only scheduling edge a same-frame caller needs.
+                spawn.in_set(SpineSet::Prepare),
                 on_spawn.in_set(SpineSet::OnReady),
-                ApplyDeferred
-                    .after(ExampleSet::Spawn)
-                    .before(SpineSystem::Spawn),
             ),
         )
         .run();
