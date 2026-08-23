@@ -26,21 +26,28 @@ use crate::{SpineMesh, SpineMeshState, SpineSettings, SpineSystem};
 /// materials but can also be used to create custom materials.
 ///
 /// Implement the trait and add it with [`SpineMaterialPlugin`].
-pub trait SpineMaterial: Material2d + PartialEq {
+pub trait SpineMaterial: Material2d {
     /// System parameters to query when updating this material.
     type Params<'w, 's>: SystemParam;
 
     /// Runs every frame for every material and every [`SpineMesh`].
     ///
-    /// If this function returns [`Some`], then the material will be applied to the [`SpineMesh`],
-    /// otherwise it will be removed. Default materials should be removed if a custom material is
-    /// desired (see [`SpineSettings::default_materials`]).
+    /// `material` is [`None`] when the mesh has no material or its asset is missing. Return
+    /// [`SpineMaterialUpdate::Keep`] when no asset change is needed. Default materials should be
+    /// removed if a custom material is desired (see [`SpineSettings::default_materials`]).
     fn update(
-        material: Option<Self>,
+        material: Option<&Self>,
         entity: Entity,
-        renderable_data: SpineMaterialInfo,
+        renderable_data: &SpineMaterialInfo,
         params: &StaticSystemParam<Self::Params<'_, '_>>,
-    ) -> Option<Self>;
+    ) -> SpineMaterialUpdate<Self>;
+}
+
+/// The change requested by [`SpineMaterial::update`].
+pub enum SpineMaterialUpdate<T> {
+    Keep,
+    Set(T),
+    Remove,
 }
 
 /// Add support for a new [`SpineMaterial`].
@@ -56,7 +63,7 @@ impl<T: SpineMaterial> Default for SpineMaterialPlugin<T> {
     }
 }
 
-impl<T: SpineMaterial + Send + Sync + 'static> Plugin for SpineMaterialPlugin<T> {
+impl<T: SpineMaterial> Plugin for SpineMaterialPlugin<T> {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
@@ -81,44 +88,41 @@ fn update_materials<T: SpineMaterial>(
     params: StaticSystemParam<T::Params<'_, '_>>,
 ) {
     for (mesh_entity, spine_mesh, material_handle) in mesh_query.iter() {
-        let SpineMeshState::Renderable { info: data } = spine_mesh.state.clone() else {
+        let SpineMeshState::Renderable { info } = &spine_mesh.state else {
             continue;
         };
-        if let Some(handle) = material_handle {
-            let id = handle.0.id();
-            let Some(material) = materials.get(id) else {
-                error!(?mesh_entity, "Spine material asset is missing");
-                if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
-                    entity_commands.remove::<MeshMaterial2d<T>>();
-                }
-                continue;
-            };
-
-            match T::update(
-                Some(material.clone()),
-                spine_mesh.spine_entity,
-                data,
-                &params,
-            ) {
-                Some(updated) if material != &updated => {
-                    if let Err(error) = materials.insert(id, updated) {
-                        error!(?mesh_entity, %error, "Failed to update Spine material");
-                    }
-                }
-                Some(_) => {}
-                None => {
-                    materials.remove(id);
-                    if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
-                        entity_commands.remove::<MeshMaterial2d<T>>();
+        let (material_id, material) = match material_handle {
+            Some(handle) => {
+                let id = handle.0.id();
+                match materials.get(id) {
+                    Some(material) => (Some(id), Some(material)),
+                    None => {
+                        error!(?mesh_entity, "Spine material asset is missing");
+                        commands.entity(mesh_entity).remove::<MeshMaterial2d<T>>();
+                        (None, None)
                     }
                 }
             }
-        } else if let Some(material) = T::update(None, spine_mesh.spine_entity, data, &params) {
-            let handle = materials.add(material);
-            if let Ok(mut entity_commands) = commands.get_entity(mesh_entity) {
-                entity_commands.insert(MeshMaterial2d(handle));
-            }
+            None => (None, None),
         };
+
+        match T::update(material, spine_mesh.spine_entity, info, &params) {
+            SpineMaterialUpdate::Keep => {}
+            SpineMaterialUpdate::Set(updated) => {
+                if let Some(id) = material_id {
+                    materials
+                        .insert(id, updated)
+                        .expect("existing Spine material ID must remain valid");
+                } else {
+                    let handle = materials.add(updated);
+                    commands.entity(mesh_entity).insert(MeshMaterial2d(handle));
+                }
+            }
+            SpineMaterialUpdate::Remove if material_id.is_some() => {
+                commands.entity(mesh_entity).remove::<MeshMaterial2d<T>>();
+            }
+            SpineMaterialUpdate::Remove => {}
+        }
     }
 }
 
@@ -142,7 +146,7 @@ pub struct SpineSettingsQuery<'w, 's> {
 macro_rules! material {
     ($(#[$($attrss:tt)*])* $name:ident, $blend_mode:expr, $premultiplied_alpha:expr, $blend_state:expr) => {
         $(#[$($attrss)*])*
-        #[derive(Asset, Default, AsBindGroup, TypePath, Clone, PartialEq)]
+        #[derive(Asset, Default, AsBindGroup, TypePath, Clone)]
         pub struct $name {
             #[texture(0)]
             #[sampler(1)]
@@ -196,18 +200,19 @@ macro_rules! material {
             type Params<'w, 's> = SpineSettingsQuery<'w, 's>;
 
             fn update(
-                material: Option<Self>,
+                material: Option<&Self>,
                 entity: Entity,
-                renderable_data: SpineMaterialInfo,
+                renderable_data: &SpineMaterialInfo,
                 params: &StaticSystemParam<Self::Params<'_, '_>>,
-            ) -> Option<Self> {
+            ) -> SpineMaterialUpdate<Self> {
                 let spine_settings = params.spine_settings_query.get(entity).copied().unwrap_or(SpineSettings::default());
                 if spine_settings.default_materials && renderable_data.blend_mode == $blend_mode && renderable_data.premultiplied_alpha == $premultiplied_alpha {
-                    let mut material = material.unwrap_or_else(|| Self::default());
-                    material.image = renderable_data.texture;
-                    Some(material)
+                    match material {
+                        Some(material) if material.image == renderable_data.texture => SpineMaterialUpdate::Keep,
+                        _ => SpineMaterialUpdate::Set(Self::new(renderable_data.texture.clone())),
+                    }
                 } else {
-                    None
+                    SpineMaterialUpdate::Remove
                 }
             }
         }

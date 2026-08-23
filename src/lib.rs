@@ -1604,6 +1604,15 @@ mod tests {
         };
         assert_ready_and_renderable(&mut app, loaded);
         assert!(!app.world().entity(loading).contains::<Spine>());
+        app.world_mut()
+            .resource_mut::<Messages<AssetEvent<SpineNormalPmaMaterial>>>()
+            .clear();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<Messages<AssetEvent<SpineNormalPmaMaterial>>>()
+                .is_empty()
+        );
 
         let initial_helpers = spine_helpers(app.world(), loaded);
         let unrelated_parent = app.world_mut().spawn_empty().id();

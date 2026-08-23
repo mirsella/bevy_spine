@@ -14,7 +14,7 @@ use bevy_spine::{
     SpineReadyEvent, SpineSet, SpineSettings,
     materials::{
         DARK_COLOR_ATTRIBUTE, DARK_COLOR_SHADER_POSITION, SpineMaterial, SpineMaterialInfo,
-        SpineMaterialPlugin,
+        SpineMaterialPlugin, SpineMaterialUpdate,
     },
 };
 
@@ -131,25 +131,30 @@ impl SpineMaterial for MyMaterial {
     type Params<'w, 's> = MyMaterialParam<'w, 's>;
 
     fn update(
-        material: Option<Self>,
+        material: Option<&Self>,
         entity: Entity,
-        renderable_data: SpineMaterialInfo,
+        renderable_data: &SpineMaterialInfo,
         params: &StaticSystemParam<Self::Params<'_, '_>>,
-    ) -> Option<Self> {
+    ) -> SpineMaterialUpdate<Self> {
         if let Ok(spine) = params.my_spine_query.get(entity) {
-            let mut material = material.unwrap_or_default();
-            material.image = renderable_data.texture;
-            material.time = params.time.elapsed_secs();
+            let mut updated = Self {
+                image: renderable_data.texture.clone(),
+                time: params.time.elapsed_secs(),
+            };
             if let Some(slot) = spine
                 .skeleton
                 .slot_at_index(renderable_data.slot_index.unwrap_or(9999))
                 && slot.data().name().starts_with("portal")
             {
-                material.time = 0.;
+                updated.time = 0.;
             }
-            Some(material)
+            if material == Some(&updated) {
+                SpineMaterialUpdate::Keep
+            } else {
+                SpineMaterialUpdate::Set(updated)
+            }
         } else {
-            None
+            SpineMaterialUpdate::Remove
         }
     }
 }
