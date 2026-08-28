@@ -399,7 +399,6 @@ fn sync_atlas(
     created_images: &mut HashSet<AssetId<Image>>,
 ) {
     let Some(atlas) = atlases.get(atlas_id) else {
-        error!(atlas = ?atlas_id, "Spine atlas event referenced a missing asset");
         unregister_atlas(data, atlas_id);
         return;
     };
