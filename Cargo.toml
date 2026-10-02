@@ -16,7 +16,7 @@ webgpu = ["bevy/webgpu"]
 webgl2 = ["bevy/webgl2"]
 
 [dependencies]
-rusty_spine = "0.8"
+rusty_spine = { version = "0.8", git = "https://github.com/mirsella/rusty_spine", rev = "8f0337db0aa5aeae792026930e1bb22d6e023909" }
 bytemuck = { version = "1.24", features = ["derive"] }
 bevy = { version = "0.19.0", git = "https://github.com/mirsella/bevy", branch = "mightyminions-0.19", default-features = false, features = [
   "bevy_log",
